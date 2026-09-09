@@ -224,7 +224,7 @@ export async function assignPosition(
 
   const { data: position } = await supabaseAdmin
     .from("positions")
-    .select("id, min_role_id, is_active, is_exclusive")
+    .select("id, name, min_role_id, is_active, is_exclusive")
     .eq("id", positionId)
     .maybeSingle();
   if (!position) return POSITION_NOT_FOUND_ERROR;
@@ -319,6 +319,12 @@ export async function assignPosition(
     actor_id: admin.id,
   });
 
+  await supabaseAdmin.from("notifications").insert({
+    user_id: userId,
+    type: "admin",
+    payload: { message: `You have been assigned the position: ${position.name}.` },
+  });
+
   revalidatePath("/profile/admin/positions");
   revalidatePath(`/profile/admin/positions/${positionId}`);
   return { success: true };
@@ -350,7 +356,7 @@ export async function revokePosition(
   const supabaseAdmin = createAdminClient();
   const { data: holding } = await supabaseAdmin
     .from("user_positions")
-    .select("id, user_id, position_id, revoked_at")
+    .select("id, user_id, position_id, revoked_at, positions ( name )")
     .eq("id", userPositionId)
     .maybeSingle();
   if (!holding) return actionError("NOT_FOUND", "This position assignment was not found.");
@@ -373,6 +379,18 @@ export async function revokePosition(
     action: "revoked",
     actor_id: admin.id,
     notes: reason,
+  });
+
+  const holdingPosition = Array.isArray(holding.positions) ? holding.positions[0] : holding.positions;
+  const positionName = (holdingPosition as { name: string } | null)?.name ?? "a position";
+  await supabaseAdmin.from("notifications").insert({
+    user_id: holding.user_id,
+    type: "admin",
+    payload: {
+      message: reason
+        ? `Your position "${positionName}" has been revoked. Reason: ${reason}`
+        : `Your position "${positionName}" has been revoked.`,
+    },
   });
 
   revalidatePath("/profile/admin/positions");

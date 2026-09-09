@@ -409,7 +409,7 @@ export async function reassignSchedule(
   const supabaseAdmin = createAdminClient();
   const { data: schedule } = await supabaseAdmin
     .from("schedules")
-    .select("id, position_id, status, group_id")
+    .select("id, position_id, status, group_id, assigned_user_id")
     .eq("id", parsed.data.scheduleId)
     .maybeSingle();
   if (!schedule) return { error: { code: "NOT_FOUND", message: "Schedule not found." } };
@@ -458,6 +458,17 @@ export async function reassignSchedule(
     type: "schedule_assigned",
     payload: { schedule_id: parsed.data.scheduleId },
   });
+
+  if (schedule.assigned_user_id && schedule.assigned_user_id !== parsed.data.newUserId) {
+    await supabaseAdmin.from("notifications").insert({
+      user_id: schedule.assigned_user_id,
+      type: "admin",
+      payload: {
+        message: "You have been reassigned away from a schedule slot.",
+        schedule_id: parsed.data.scheduleId,
+      },
+    });
+  }
 
   revalidatePath("/schedule");
   if (schedule.group_id) revalidatePath(`/groups/${schedule.group_id}/overview`);

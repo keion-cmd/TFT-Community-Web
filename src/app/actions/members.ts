@@ -166,6 +166,12 @@ export async function rejectMember(
       .eq("id", pendingApproval.id);
   }
 
+  await supabaseAdmin.from("notifications").insert({
+    user_id: userId,
+    type: "admin",
+    payload: { message: "Your application was not approved." },
+  });
+
   revalidatePath("/profile/admin");
   return { success: true };
 }

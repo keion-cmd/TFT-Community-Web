@@ -74,6 +74,20 @@ export async function processBroadcastTargets(
           error: err instanceof Error ? err.message : "Unknown delivery error",
         })
         .eq("id", target.id);
+
+      const { data: group } = await supabaseAdmin
+        .from("groups")
+        .select("name")
+        .eq("id", target.group_id)
+        .maybeSingle();
+
+      await supabaseAdmin.from("notifications").insert({
+        user_id: broadcast.sender_id,
+        type: "admin",
+        payload: {
+          message: `Your broadcast failed to deliver to group "${group?.name ?? target.group_id}".`,
+        },
+      });
     }
   }
 }
