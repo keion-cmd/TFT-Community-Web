@@ -97,7 +97,7 @@ export function BroadcastComposeForm({ groups }: { groups: Group[] }) {
         </div>
         <div className="flex flex-col gap-1">
           <label htmlFor="broadcast-attachment" className="text-sm font-medium">
-            Attachment URL (optional)
+            Link (optional)
           </label>
           <input
             id="broadcast-attachment"
@@ -161,7 +161,7 @@ export function BroadcastComposeForm({ groups }: { groups: Group[] }) {
           <p className="whitespace-pre-wrap text-sm">{preview.message}</p>
           {preview.attachmentUrl && (
             <p className="text-sm text-black/60 dark:text-white/60">
-              Attachment: <span className="underline">{preview.attachmentUrl}</span>
+              Link: <span className="underline">{preview.attachmentUrl}</span>
             </p>
           )}
           <div className="flex flex-col gap-1">

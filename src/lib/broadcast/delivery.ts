@@ -16,47 +16,37 @@ export type BroadcastTargetRow = {
 };
 
 // Delivers one broadcast_targets row: inserts the message into the target
-// group (+ a message_attachments row if the broadcast has a link) using the
-// service-role client. The triggering admin may not be an active member of
-// every target group, and this is authorized system delivery on behalf of
-// an already-verified admin action — same justification as
-// detect_missed_schedules. Everything else about the broadcast flow (auth
-// checks, fetching the broadcast) stays on the session client; only this
-// cross-group write needs the service role. (broadcast_targets itself also
-// has no client insert/update RLS policy — 0001_init.sql's own comment says
-// those rows are written only through send_broadcast or trusted server
-// code — so the status-transition writes below use the same admin client.)
+// group using the service-role client. The triggering admin may not be an
+// active member of every target group, and this is authorized system
+// delivery on behalf of an already-verified admin action — same
+// justification as detect_missed_schedules. Everything else about the
+// broadcast flow (auth checks, fetching the broadcast) stays on the session
+// client; only this cross-group write needs the service role.
+// (broadcast_targets itself also has no client insert/update RLS policy —
+// 0001_init.sql's own comment says those rows are written only through
+// send_broadcast or trusted server code — so the status-transition writes
+// below use the same admin client.)
+//
+// message_attachments has no url-only column (unlike group_resources) —
+// storage_path/mime_type/size_bytes are all not-null, built for real
+// uploads. Broadcast link attachments have no file, so the URL is appended
+// to the message content as plain text instead of faking an attachment row.
 async function deliverToTarget(
   supabaseAdmin: SupabaseAdmin,
   broadcast: BroadcastRow,
   target: BroadcastTargetRow,
 ): Promise<void> {
-  const { data: inserted, error: insertError } = await supabaseAdmin
-    .from("messages")
-    .insert({
-      group_id: target.group_id,
-      sender_id: broadcast.sender_id,
-      content: broadcast.message,
-    })
-    .select("id")
-    .single();
-  if (insertError || !inserted) {
-    throw new Error(insertError?.message ?? "Could not insert broadcast message.");
-  }
+  const content = broadcast.attachment_url
+    ? `${broadcast.message}\n\n${broadcast.attachment_url}`
+    : broadcast.message;
 
-  if (broadcast.attachment_url) {
-    // message_attachments has no url-only column (unlike group_resources) —
-    // storage_path/mime_type/size_bytes are all not-null, built for real
-    // uploads. text/uri-list marks this row as a link, not a binary file.
-    const { error: attachmentError } = await supabaseAdmin.from("message_attachments").insert({
-      message_id: inserted.id,
-      storage_path: broadcast.attachment_url,
-      mime_type: "text/uri-list",
-      size_bytes: 0,
-    });
-    if (attachmentError) {
-      throw new Error(attachmentError.message);
-    }
+  const { error: insertError } = await supabaseAdmin.from("messages").insert({
+    group_id: target.group_id,
+    sender_id: broadcast.sender_id,
+    content,
+  });
+  if (insertError) {
+    throw new Error(insertError.message);
   }
 }
 
