@@ -3,8 +3,10 @@ import Link from "next/link";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { createClient } from "@/lib/supabase/server";
+import { getAttentionRequiredSummary } from "@/app/actions/attentionRequired";
 import { CreateGroupForm } from "./CreateGroupForm";
 import { JoinGroupButton } from "./JoinGroupButton";
+import { AttentionBanner } from "./AttentionBanner";
 
 export default async function GroupsBrowsePage() {
   const profile = await getCurrentProfile();
@@ -38,6 +40,13 @@ export default async function GroupsBrowsePage() {
 
   const isAdmin = profile.roleRank >= ADMIN_MIN_RANK;
 
+  // Per docs/TFT-Revision-UnifiedApp.md section B: "Attention Required"
+  // surfaces at the top of the Groups tab for Admin/Super Admin only, not as
+  // a separate landing page — fetched here rather than on every page for
+  // every role.
+  const attentionResult = isAdmin ? await getAttentionRequiredSummary() : null;
+  const attentionSummary = attentionResult && "summary" in attentionResult ? attentionResult.summary : null;
+
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-10 p-6 sm:p-10">
       <div className="flex items-center justify-between">
@@ -46,6 +55,8 @@ export default async function GroupsBrowsePage() {
           Back to chats
         </Link>
       </div>
+
+      {attentionSummary && <AttentionBanner summary={attentionSummary} />}
 
       {isAdmin && (
         <section className="flex flex-col gap-4">

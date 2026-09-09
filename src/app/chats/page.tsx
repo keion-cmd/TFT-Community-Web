@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { listMyGroups, listMyDirectMessages } from "@/app/actions/messaging";
 import { ChatsList } from "./ChatsList";
+import { NotificationBell } from "@/app/notifications/NotificationBell";
 
 export default async function ChatsPage() {
   const profile = await getCurrentProfile();
@@ -18,6 +19,7 @@ export default async function ChatsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Chats</h1>
         <div className="flex items-center gap-4">
+          <NotificationBell userId={profile.id} />
           <Link href="/groups" className="text-sm underline underline-offset-4">
             Browse groups
           </Link>
