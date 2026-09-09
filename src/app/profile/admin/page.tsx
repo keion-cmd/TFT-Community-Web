@@ -10,6 +10,7 @@ import {
   reinstateMember,
 } from "@/app/actions/members";
 import { MemberActionForm } from "./MemberActionForm";
+import { RoleChangeForm } from "./RoleChangeForm";
 
 export default async function AdminMemberApprovalQueuePage() {
   const profile = await getCurrentProfile();
@@ -27,9 +28,11 @@ export default async function AdminMemberApprovalQueuePage() {
 
   const { data: members } = await admin
     .from("profiles")
-    .select("id, username, display_name, status, roles ( name )")
+    .select("id, username, display_name, status, role_id, roles ( name, rank )")
     .in("status", ["active", "suspended", "disabled"])
     .order("username", { ascending: true });
+
+  const { data: roles } = await admin.from("roles").select("id, name, rank").order("rank", { ascending: true });
 
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-10 p-6 sm:p-10">
@@ -94,42 +97,61 @@ export default async function AdminMemberApprovalQueuePage() {
           <ul className="flex flex-col gap-3">
             {members.map((member) => {
               const role = Array.isArray(member.roles) ? member.roles[0] : member.roles;
+              const roleRank = (role as { rank: number } | null)?.rank ?? 10;
               return (
                 <li
                   key={member.id}
-                  className="flex flex-col justify-between gap-3 rounded-lg border border-black/[.08] dark:border-white/[.145] p-4 sm:flex-row sm:items-center"
+                  className="flex flex-col gap-3 rounded-lg border border-black/[.08] dark:border-white/[.145] p-4"
                 >
-                  <div>
-                    <p className="font-medium">
-                      {member.display_name}{" "}
-                      <span className="text-xs font-normal text-black/50 dark:text-white/50">
-                        ({role?.name ?? "Member"})
-                      </span>
-                    </p>
-                    <p className="text-sm text-black/60 dark:text-white/60">
-                      @{member.username} — {member.status}
-                    </p>
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                    <div>
+                      <p className="font-medium">
+                        {member.display_name}{" "}
+                        <span className="text-xs font-normal text-black/50 dark:text-white/50">
+                          ({role?.name ?? "Member"})
+                        </span>
+                      </p>
+                      <p className="text-sm text-black/60 dark:text-white/60">
+                        @{member.username} — {member.status}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {member.status === "active" ? (
+                        <MemberActionForm
+                          action={suspendMember}
+                          userId={member.id}
+                          label="Suspend"
+                          variant="danger"
+                          requireReason
+                          confirmMessage="Suspend this member? Their sessions are revoked immediately."
+                        />
+                      ) : (
+                        <MemberActionForm
+                          action={reinstateMember}
+                          userId={member.id}
+                          label="Reinstate"
+                          variant="primary"
+                          confirmMessage="Reinstate this member?"
+                        />
+                      )}
+                      <Link
+                        href={`/profile/admin/staff-exit/${member.id}`}
+                        className="rounded bg-black/[.06] px-3 py-1.5 text-sm font-medium hover:bg-black/[.1] dark:bg-white/[.1] dark:hover:bg-white/[.15]"
+                      >
+                        Staff Exit
+                      </Link>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {member.status === "active" ? (
-                      <MemberActionForm
-                        action={suspendMember}
-                        userId={member.id}
-                        label="Suspend"
-                        variant="danger"
-                        requireReason
-                        confirmMessage="Suspend this member? Their sessions are revoked immediately."
-                      />
-                    ) : (
-                      <MemberActionForm
-                        action={reinstateMember}
-                        userId={member.id}
-                        label="Reinstate"
-                        variant="primary"
-                        confirmMessage="Reinstate this member?"
-                      />
-                    )}
-                  </div>
+
+                  <RoleChangeForm
+                    userId={member.id}
+                    username={member.username}
+                    currentRoleId={member.role_id}
+                    currentRoleName={role?.name ?? "Member"}
+                    currentRoleRank={roleRank}
+                    viewerRoleRank={profile.roleRank}
+                    roles={roles ?? []}
+                  />
                 </li>
               );
             })}
