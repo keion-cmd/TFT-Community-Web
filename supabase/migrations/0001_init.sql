@@ -5,10 +5,11 @@
 -- (claim_schedule RPC), section D (RLS pattern + helper functions +
 -- representative policies, extended here to full per-table coverage).
 --
--- NOTE ON SCOPE: the entity overview in section A lists a `sessions`
--- table under GOVERNANCE, but no DDL for it appears anywhere in
--- section B. It is intentionally NOT created here — see BLOCKED ITEMS
--- in the task report. Everything else in section A is present below.
+-- Gaps originally flagged in T-CODE-02's report (sessions table, the
+-- check_in_schedule/release_schedule/send_broadcast RPC bodies, and the
+-- one_active_holder_if_exclusive index bug) are resolved per
+-- docs/TFT-Schema-Addendum.md — see the sessions table below, the RPCs
+-- after claim_schedule, and the exclusivity trigger note.
 -- ============================================================
 
 -- ============================================================
@@ -87,22 +88,11 @@ create table position_history (
   created_at timestamptz not null default now()
 );
 
--- Enforce exclusivity at the DB layer for positions marked is_exclusive:
-create unique index one_active_holder_if_exclusive
-  on user_positions (position_id)
-  where revoked_at is null;
-  -- NOTE: this index only makes sense for exclusive positions; applied via
-  -- a BEFORE INSERT trigger that checks positions.is_exclusive before allowing
-  -- more than one active row (partial unique index alone can't conditionally
-  -- apply per-row — trigger below).
-  --
-  -- CARRIED FROM SOURCE DOC AS-WRITTEN: as literally specified, this partial
-  -- unique index applies to EVERY position_id (exclusive or not), since a
-  -- partial index cannot itself branch on positions.is_exclusive. That means
-  -- it will also block a second concurrent active holder for a NON-exclusive
-  -- position, which is likely not the intent. Flagged in BLOCKED ITEMS rather
-  -- than silently changed, since resolving it one way or the other is a
-  -- decision, not a syntax fix.
+-- Exclusivity for is_exclusive positions is enforced solely by the trigger
+-- below. (Addendum section 3: a partial unique index previously stood here
+-- but applied to every position_id regardless of is_exclusive — redundant
+-- with, and broader than, the trigger. Removed rather than fixed in place
+-- since the trigger alone is correct and sufficient.)
 
 create or replace function enforce_position_exclusivity() returns trigger as $$
 begin
@@ -282,6 +272,21 @@ create table notifications (
   created_at timestamptz not null default now()
 );
 
+-- sessions: read-model only, actual token validity is Supabase Auth's job
+-- (Phase 6-D). Populated on sign-in, updated by heartbeat, marked
+-- revoked_at when Admin force-revokes or on suspend/remove.
+-- Source: docs/TFT-Schema-Addendum.md section 1.
+create table sessions (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references profiles(id),
+  device_info text,
+  ip_address inet,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  revoked_at timestamptz
+);
+create index idx_sessions_user on sessions(user_id);
+
 -- ============================================================
 -- RPC: claim_schedule
 -- Source: TFT-Phase3-Database.md section C, verbatim.
@@ -339,6 +344,128 @@ begin
   values (v_user_id, 'schedule_claimed', 'schedule', p_schedule_id::text);
 
   return v_row;
+end;
+$$;
+
+-- ============================================================
+-- RPC: check_in_schedule / release_schedule / send_broadcast
+-- Source: docs/TFT-Schema-Addendum.md section 2 (RPCs referenced by name
+-- in TFT-Phase3-Database.md section C but without bodies until now).
+-- ============================================================
+create or replace function check_in_schedule(p_schedule_id bigint)
+returns schedules
+language plpgsql
+security definer
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_row schedules;
+begin
+  if v_user_id is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  update schedules
+  set status = 'checked_in', checkin_at = now()
+  where id = p_schedule_id
+    and assigned_user_id = v_user_id
+    and status = 'claimed'
+  returning * into v_row;
+
+  if v_row.id is null then
+    raise exception 'NOT_YOUR_SLOT_OR_INVALID_STATE';
+  end if;
+
+  insert into audit_logs (actor_id, action, target_type, target_id)
+  values (v_user_id, 'schedule_checked_in', 'schedule', p_schedule_id::text);
+
+  return v_row;
+end;
+$$;
+
+create or replace function release_schedule(p_schedule_id bigint)
+returns schedules
+language plpgsql
+security definer
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_row schedules;
+begin
+  if v_user_id is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  update schedules
+  set status = 'available', assigned_user_id = null, claimed_at = null
+  where id = p_schedule_id
+    and status in ('claimed','checked_in')
+    and (assigned_user_id = v_user_id or is_admin())
+  returning * into v_row;
+
+  if v_row.id is null then
+    raise exception 'NOT_YOUR_SLOT_OR_INVALID_STATE';
+  end if;
+
+  insert into audit_logs (actor_id, action, target_type, target_id)
+  values (v_user_id, 'schedule_released', 'schedule', p_schedule_id::text);
+
+  return v_row;
+end;
+$$;
+
+-- send_broadcast: creates the broadcast + per-target rows atomically.
+-- Actual delivery (inserting the message into each target group) happens in a
+-- background job processing 'pending' broadcast_targets rows, NOT synchronously
+-- here — matches the background-jobs pattern from Phase 3/6, keeps this RPC fast.
+-- Note: references current_role_rank(), defined below in the RLS helper
+-- functions section — safe forward reference, plpgsql function bodies are
+-- only resolved at call time, not at CREATE FUNCTION time.
+create or replace function send_broadcast(
+  p_message text,
+  p_attachment_url text,
+  p_target_group_ids bigint[],
+  p_idempotency_key text
+)
+returns broadcasts
+language plpgsql
+security definer
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_broadcast broadcasts;
+  v_group_id bigint;
+begin
+  if v_user_id is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if current_role_rank() < 40 then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  if p_target_group_ids is null or array_length(p_target_group_ids, 1) is null then
+    raise exception 'NO_TARGETS_SELECTED';
+  end if;
+
+  select * into v_broadcast from broadcasts where idempotency_key = p_idempotency_key;
+  if found then
+    return v_broadcast;  -- duplicate request: return original result, no error, no re-send
+  end if;
+
+  insert into broadcasts (sender_id, message, attachment_url, idempotency_key)
+  values (v_user_id, p_message, p_attachment_url, p_idempotency_key)
+  returning * into v_broadcast;
+
+  foreach v_group_id in array p_target_group_ids loop
+    insert into broadcast_targets (broadcast_id, group_id, status)
+    values (v_broadcast.id, v_group_id, 'pending');
+  end loop;
+
+  insert into audit_logs (actor_id, action, target_type, target_id)
+  values (v_user_id, 'broadcast_sent', 'broadcast', v_broadcast.id::text);
+
+  return v_broadcast;
 end;
 $$;
 
@@ -624,11 +751,10 @@ create policy "schedule slots created by admin"
   on schedules for insert
   with check (is_admin());
   -- claim/check-in/release/cancel of an EXISTING slot happen only through
-  -- security-definer RPCs (claim_schedule above; check_in_schedule /
-  -- release_schedule referenced by name in section C but not given a body
-  -- in the source doc — flagged in BLOCKED ITEMS). No general client
-  -- UPDATE policy is defined here so that those state transitions cannot
-  -- be performed by a raw client UPDATE bypassing RPC business rules;
+  -- security-definer RPCs (claim_schedule, check_in_schedule,
+  -- release_schedule above). No general client UPDATE policy is defined
+  -- here so that those state transitions cannot be performed by a raw
+  -- client UPDATE bypassing RPC business rules;
   -- admin override (reassign/cancel, per the Revision doc's Schedule tab)
   -- is the one direct-UPDATE exception:
 create policy "schedule slots overridden by admin"
@@ -650,8 +776,7 @@ alter table broadcast_targets enable row level security;
 create policy "broadcast targets readable by admin"
   on broadcast_targets for select
   using (is_admin());
--- writes happen only through the send_broadcast RPC (named in section C,
--- body not given in the source doc — see BLOCKED ITEMS) — no client
+-- writes happen only through the send_broadcast RPC above — no client
 -- insert/update policy defined (default deny).
 
 -- ---- audit_logs ----
@@ -683,3 +808,13 @@ create policy "notifications marked read by their own user"
   using (user_id = auth.uid());
 -- inserts are system-generated (triggers / server actions using service
 -- role), not raw client writes — no insert policy defined.
+
+-- ---- sessions ----
+-- Source: docs/TFT-Schema-Addendum.md section 1.
+alter table sessions enable row level security;
+create policy "users see own sessions, admins see all"
+  on sessions for select
+  using (user_id = auth.uid() or is_admin());
+-- writes (create on sign-in, heartbeat update, revoke) are system-generated
+-- via server actions using service role / RPC, not raw client writes —
+-- no insert/update policy defined (default deny).

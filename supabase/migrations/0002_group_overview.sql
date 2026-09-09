@@ -61,13 +61,80 @@ create table group_resources (
   check (url is not null or storage_path is not null)
 );
 
--- NOTE: TFT-Revision-UnifiedApp.md section F states group_resources should
--- "follow the same RLS-by-membership + Server Action re-check pattern as
--- everything else," but section D (the section this migration is scoped
--- to) gives no concrete policy text for it. No RLS policy is added here to
--- stay within "matching the ALTER/CREATE statements in the source doc
--- exactly" — flagged in BLOCKED ITEMS for a follow-up migration once the
--- exact membership/moderator-write policy is specified. RLS is switched on
--- now (safe default: deny-all until that follow-up policy lands) so the
--- table is never accidentally left open over PostgREST in the interim.
+-- group_resources RLS: membership-gated read, moderator/coordinator/admin
+-- write, per TFT-Revision-UnifiedApp.md section F's "RLS-by-membership +
+-- Server Action re-check" pattern, made concrete in
+-- docs/TFT-Schema-Addendum.md section 4.
 alter table group_resources enable row level security;
+
+create policy "group resources visible to group members"
+  on group_resources for select
+  using (
+    exists (select 1 from group_members gm where gm.group_id = group_resources.group_id and gm.user_id = auth.uid())
+    or is_admin()
+  );
+
+create policy "group resources insertable by moderator/coordinator/admin"
+  on group_resources for insert
+  with check (
+    is_admin()
+    or exists (
+      select 1 from group_members gm
+      where gm.group_id = group_resources.group_id
+        and gm.user_id = auth.uid()
+        and gm.role_in_group in ('moderator','coordinator')
+    )
+  );
+
+create policy "group resources deletable by moderator/coordinator/admin"
+  on group_resources for delete
+  using (
+    is_admin()
+    or exists (
+      select 1 from group_members gm
+      where gm.group_id = group_resources.group_id
+        and gm.user_id = auth.uid()
+        and gm.role_in_group in ('moderator','coordinator')
+    )
+  );
+
+-- ============================================================
+-- Group-type visibility (docs/TFT-Schema-Addendum.md section 5)
+--
+-- public       — any authenticated, active user
+-- staff_only   — Role >= Assistant Admin, OR holds an active Position
+-- admin_only   — Role >= Admin
+-- private/broadcast — explicit group_members row only (invite-only)
+-- Admin always sees all, for oversight.
+--
+-- NOTE: 0001_init.sql already defines a broader "groups readable by
+-- members or admin" SELECT policy (is_admin() OR type='public' OR any
+-- group_members row exists, regardless of type). Postgres combines
+-- multiple permissive SELECT policies with OR, so that existing policy's
+-- unconditional "member exists" clause will still grant read access to a
+-- staff_only/admin_only group for any user who has a group_members row
+-- there, independent of the type-based checks below. Amending 0001's
+-- policy is outside this migration's authorized scope (0002 amendments
+-- only add group_resources policies + this function/policy per the task
+-- instructions) — flagged here rather than silently touching 0001.
+-- ============================================================
+create or replace function user_is_staff() returns boolean
+language sql stable as $$
+  select coalesce(
+    current_role_rank() >= 30
+    or exists (select 1 from user_positions where user_id = auth.uid() and revoked_at is null),
+    false
+  );
+$$;
+
+create policy "groups visible per type"
+  on groups for select
+  using (
+    type = 'public'
+    or (type = 'staff_only' and user_is_staff())
+    or (type = 'admin_only' and is_admin())
+    or (type in ('private','broadcast') and exists (
+      select 1 from group_members gm where gm.group_id = groups.id and gm.user_id = auth.uid()
+    ))
+    or is_admin()
+  );
