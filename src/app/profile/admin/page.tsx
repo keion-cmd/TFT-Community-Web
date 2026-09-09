@@ -35,9 +35,14 @@ export default async function AdminMemberApprovalQueuePage() {
     <main className="mx-auto flex max-w-3xl flex-col gap-10 p-6 sm:p-10">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Admin Tools — Member Approval Queue</h1>
-        <Link href="/profile" className="text-sm underline underline-offset-4">
-          Back to profile
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link href="/profile/admin/positions" className="text-sm underline underline-offset-4">
+            Positions Manager
+          </Link>
+          <Link href="/profile" className="text-sm underline underline-offset-4">
+            Back to profile
+          </Link>
+        </div>
       </div>
 
       <section className="flex flex-col gap-4">

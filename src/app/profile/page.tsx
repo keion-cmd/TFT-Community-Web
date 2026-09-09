@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { signOut } from "@/app/actions/auth";
@@ -28,12 +29,23 @@ export default async function ProfilePage() {
       <ProfileEditForm displayName={profile.displayName} bio={profile.bio ?? ""} />
 
       {profile.roleRank >= ADMIN_MIN_RANK && (
-        <a
-          href="/profile/admin"
-          className="rounded-lg border border-black/[.08] dark:border-white/[.145] p-4 text-sm font-medium hover:bg-black/[.03] dark:hover:bg-white/[.05]"
-        >
-          Admin Tools →
-        </a>
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">
+            Admin Tools
+          </h2>
+          <Link
+            href="/profile/admin"
+            className="rounded-lg border border-black/[.08] dark:border-white/[.145] p-4 text-sm font-medium hover:bg-black/[.03] dark:hover:bg-white/[.05]"
+          >
+            Member Approval Queue →
+          </Link>
+          <Link
+            href="/profile/admin/positions"
+            className="rounded-lg border border-black/[.08] dark:border-white/[.145] p-4 text-sm font-medium hover:bg-black/[.03] dark:hover:bg-white/[.05]"
+          >
+            Positions Manager →
+          </Link>
+        </section>
       )}
     </main>
   );
