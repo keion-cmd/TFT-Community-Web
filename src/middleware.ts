@@ -72,6 +72,12 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    // api/cron/* excluded: those routes have no user session to check
+    // (called by the Vercel Cron trigger, not a browser) and gate
+    // themselves on a shared secret instead — see
+    // src/app/api/cron/detect-missed-schedules/route.ts. Without this
+    // exclusion, this middleware would redirect every cron request to
+    // /login before the route handler ever ran.
+    "/((?!_next/static|_next/image|favicon.ico|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

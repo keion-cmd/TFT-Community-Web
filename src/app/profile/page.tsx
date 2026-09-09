@@ -41,6 +41,12 @@ export default async function ProfilePage() {
         >
           Groups →
         </Link>
+        <Link
+          href="/schedule"
+          className="rounded-lg border border-black/[.08] p-4 text-sm font-medium hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
+        >
+          Schedule →
+        </Link>
       </section>
 
       {profile.roleRank >= ADMIN_MIN_RANK && (
