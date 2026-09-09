@@ -28,6 +28,21 @@ export default async function ProfilePage() {
 
       <ProfileEditForm displayName={profile.displayName} bio={profile.bio ?? ""} />
 
+      <section className="flex flex-col gap-2">
+        <Link
+          href="/chats"
+          className="rounded-lg border border-black/[.08] p-4 text-sm font-medium hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
+        >
+          Chats →
+        </Link>
+        <Link
+          href="/groups"
+          className="rounded-lg border border-black/[.08] p-4 text-sm font-medium hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
+        >
+          Groups →
+        </Link>
+      </section>
+
       {profile.roleRank >= ADMIN_MIN_RANK && (
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">

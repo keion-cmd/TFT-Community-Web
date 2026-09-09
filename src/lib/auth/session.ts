@@ -38,3 +38,14 @@ export async function requireAdmin(): Promise<ProfileWithRole> {
 
   return profile;
 }
+
+// Same shape as requireAdmin but without the rank floor — for messaging and
+// any other action that only needs "signed in and approved", not Admin.
+export async function requireActiveUser(): Promise<ProfileWithRole> {
+  const profile = await getCurrentProfile();
+
+  if (!profile) throw new AuthorizationError("NOT_AUTHENTICATED");
+  if (profile.status !== "active") throw new AuthorizationError("ACCOUNT_NOT_ACTIVE");
+
+  return profile;
+}
