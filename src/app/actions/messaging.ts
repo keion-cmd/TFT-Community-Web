@@ -42,11 +42,6 @@ function dmPair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
-function isRlsError(error: { code?: string; message?: string } | null): boolean {
-  if (!error) return false;
-  return error.code === "42501" || (error.message ?? "").toLowerCase().includes("row-level security");
-}
-
 // group_members.role_in_group check constraint (supabase/migrations/0002_group_overview.sql)
 // allows 'member' | 'moderator' | 'coordinator'. Both moderator and
 // coordinator are treated as having moderation authority here.
@@ -131,14 +126,10 @@ export async function createGroup(
 
 // ============================================================
 // joinGroup — eligibility is re-derived from the DB (public / staff_only /
-// admin_only / private-broadcast), then the actual insert goes through the
-// caller's own session client so RLS is the real gate, not just the app
-// layer. See BLOCKED ITEMS in the T-CODE-08 report: 0001_init.sql's
-// group_members INSERT policy is `with check (is_admin())` — unconditional,
-// not type-aware — so this currently rejects every non-admin regardless of
-// group type. That RLS rejection is caught below and surfaced as
-// NOT_ELIGIBLE per this task's explicit instruction, rather than a raw
-// Postgres error.
+// admin_only / private-broadcast) for a fast, friendly rejection, then the
+// actual write goes through the join_group RPC (docs/TFT-Messaging-RPC-Fix.md),
+// which re-checks the same eligibility rules itself as the real gate — the
+// app-layer check above is a nicety, not the security boundary.
 // ============================================================
 export async function joinGroup(
   _prevState: ActionState,
@@ -178,11 +169,10 @@ export async function joinGroup(
   if (!eligible) return NOT_ELIGIBLE;
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("group_members")
-    .insert({ group_id: groupId, user_id: profile.id, role_in_group: "member" });
+  const { error } = await supabase.rpc("join_group", { p_group_id: groupId });
   if (error) {
-    if (isRlsError(error)) return NOT_ELIGIBLE;
+    if (error.message?.includes("NOT_ELIGIBLE")) return NOT_ELIGIBLE;
+    if (error.message?.includes("NOT_FOUND")) return actionError("NOT_FOUND", "Group not found.");
     return actionError("JOIN_FAILED", "Could not join this group.");
   }
 
@@ -192,13 +182,10 @@ export async function joinGroup(
 }
 
 // ============================================================
-// muteMember / removeMember — moderator/admin only. Same underlying RLS
-// gap as joinGroup: 0001_init.sql's group_members UPDATE/DELETE policies
-// are is_admin()-only, with no carve-out for role_in_group='moderator'.
-// The app-layer check below is the real gate for Admins (works end-to-end);
-// for a group moderator who isn't a global Admin, the write is attempted
-// and — if RLS rejects it — surfaced as a clean NOT_AUTHORIZED rather than
-// a raw Postgres error. See BLOCKED ITEMS.
+// muteMember / removeMember — moderator/coordinator/admin, via the
+// moderate_group_member RPC (docs/TFT-Messaging-RPC-Fix.md). The app-layer
+// canModerateGroup check below is a fast, friendly rejection; the RPC
+// re-checks the same authorization itself as the real gate.
 // ============================================================
 export async function muteMember(
   _prevState: ActionState,
@@ -235,17 +222,13 @@ export async function muteMember(
   if (!membership) return actionError("NOT_FOUND", "This member is not in the group.");
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("group_members")
-    .update({ muted_until: until ?? null })
-    .eq("id", membership.id);
+  const { error } = await supabase.rpc("moderate_group_member", {
+    p_group_id: groupId,
+    p_target_user_id: userId,
+    p_action: "mute",
+    p_mute_until: until ?? null,
+  });
   if (error) {
-    if (isRlsError(error)) {
-      return actionError(
-        "NOT_AUTHORIZED",
-        "Only an Admin can do this right now — moderator write access needs a schema update. See BLOCKED ITEMS.",
-      );
-    }
     return actionError("MUTE_FAILED", "Could not update this member.");
   }
 
@@ -285,14 +268,12 @@ export async function removeMember(
   if (!membership) return actionError("NOT_FOUND", "This member is not in the group.");
 
   const supabase = await createClient();
-  const { error } = await supabase.from("group_members").delete().eq("id", membership.id);
+  const { error } = await supabase.rpc("moderate_group_member", {
+    p_group_id: groupId,
+    p_target_user_id: userId,
+    p_action: "remove",
+  });
   if (error) {
-    if (isRlsError(error)) {
-      return actionError(
-        "NOT_AUTHORIZED",
-        "Only an Admin can do this right now — moderator write access needs a schema update. See BLOCKED ITEMS.",
-      );
-    }
     return actionError("REMOVE_FAILED", "Could not remove this member.");
   }
 
@@ -671,22 +652,24 @@ export async function deleteMessage(
   }
 
   const supabase = await createClient();
-  const { error } = await supabase
-    .from("messages")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", parsed.data.messageId);
-  if (error) {
-    if (isRlsError(error)) {
-      return {
-        error: {
-          code: "NOT_AUTHORIZED",
-          message:
-            "Only an Admin can delete another member's message right now — moderator write access needs a schema update. See BLOCKED ITEMS.",
-        },
-      };
-    }
-    return { error: { code: "DELETE_FAILED", message: "Could not delete this message." } };
+
+  // Own-message delete: unaffected, already works via the existing
+  // sender_id = auth.uid() RLS policy on messages.
+  if (isSender) {
+    const { error } = await supabase
+      .from("messages")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", parsed.data.messageId);
+    if (error) return { error: { code: "DELETE_FAILED", message: "Could not delete this message." } };
+    return { success: true };
   }
+
+  // Moderator/coordinator/admin deleting someone else's message — via the
+  // moderate_delete_message RPC (docs/TFT-Messaging-RPC-Fix.md).
+  const { error } = await supabase.rpc("moderate_delete_message", {
+    p_message_id: parsed.data.messageId,
+  });
+  if (error) return { error: { code: "DELETE_FAILED", message: "Could not delete this message." } };
 
   return { success: true };
 }

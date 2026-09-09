@@ -559,6 +559,148 @@ end;
 $$;
 
 -- ============================================================
+-- RPC: join_group / moderate_group_member / moderate_delete_message
+-- Source: docs/TFT-Messaging-RPC-Fix.md, verbatim (found in T-CODE-08's
+-- report: group_members/messages RLS write policies below are
+-- is_admin()-only, with no path for a regular user to self-join a public
+-- group or for a group moderator/coordinator, who is not a global Admin,
+-- to moderate their own group). Same SECURITY DEFINER + self-checked
+-- pattern as claim_schedule / set_member_status above.
+-- Note: join_group references user_is_staff(), defined in
+-- 0002_group_overview.sql (a later migration file) — safe forward
+-- reference, same as send_broadcast's forward reference to
+-- current_role_rank() below: plpgsql function bodies resolve names at
+-- call time, and by the time these RPCs are actually invoked from the
+-- app, both migrations have already been applied in order.
+-- ============================================================
+create or replace function join_group(p_group_id bigint)
+returns group_members
+language plpgsql
+security definer
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_type text;
+  v_row group_members;
+begin
+  if v_user_id is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select type into v_type from groups where id = p_group_id and archived_at is null;
+  if v_type is null then
+    raise exception 'NOT_FOUND';
+  end if;
+
+  if v_type = 'staff_only' and not user_is_staff() then
+    raise exception 'NOT_ELIGIBLE';
+  elsif v_type = 'admin_only' and not is_admin() then
+    raise exception 'NOT_ELIGIBLE';
+  elsif v_type in ('private','broadcast') and not is_admin() then
+    -- these require an explicit add, never self-join
+    raise exception 'NOT_ELIGIBLE';
+  end if;
+
+  insert into group_members (group_id, user_id, role_in_group)
+  values (p_group_id, v_user_id, 'member')
+  on conflict (group_id, user_id) do nothing
+  returning * into v_row;
+
+  if v_row.id is null then
+    select * into v_row from group_members where group_id = p_group_id and user_id = v_user_id;
+  end if;
+
+  return v_row;
+end;
+$$;
+
+create or replace function moderate_group_member(
+  p_group_id bigint,
+  p_target_user_id uuid,
+  p_action text,               -- 'mute' | 'unmute' | 'remove'
+  p_mute_until timestamptz default null
+)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select role_in_group into v_actor_role
+  from group_members where group_id = p_group_id and user_id = v_actor;
+
+  if not (is_admin() or v_actor_role in ('moderator','coordinator')) then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  if p_action = 'mute' then
+    update group_members set muted_until = p_mute_until
+    where group_id = p_group_id and user_id = p_target_user_id;
+  elsif p_action = 'unmute' then
+    update group_members set muted_until = null
+    where group_id = p_group_id and user_id = p_target_user_id;
+  elsif p_action = 'remove' then
+    delete from group_members
+    where group_id = p_group_id and user_id = p_target_user_id;
+  else
+    raise exception 'INVALID_ACTION';
+  end if;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (v_actor, 'group_member_moderated', 'group_member', p_target_user_id::text,
+    jsonb_build_object('group_id', p_group_id, 'action', p_action));
+end;
+$$;
+
+-- Moderator/coordinator/admin-gated message soft-delete (for messages
+-- that AREN'T the caller's own — own-message delete already works via
+-- the existing sender_id = auth.uid() RLS policy, untouched here)
+create or replace function moderate_delete_message(p_message_id bigint)
+returns messages
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_group_id bigint;
+  v_actor_role text;
+  v_row messages;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select group_id into v_group_id from messages where id = p_message_id;
+  if v_group_id is null then
+    raise exception 'NOT_FOUND_OR_NOT_A_GROUP_MESSAGE';  -- DMs use the existing sender-only path
+  end if;
+
+  select role_in_group into v_actor_role
+  from group_members where group_id = v_group_id and user_id = v_actor;
+
+  if not (is_admin() or v_actor_role in ('moderator','coordinator')) then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  update messages set deleted_at = now()
+  where id = p_message_id
+  returning * into v_row;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (v_actor, 'message_moderated_delete', 'message', p_message_id::text,
+    jsonb_build_object('group_id', v_group_id));
+
+  return v_row;
+end;
+$$;
+
+-- ============================================================
 -- RLS — helper functions
 -- Source: TFT-Phase3-Database.md section D, verbatim.
 -- ============================================================
