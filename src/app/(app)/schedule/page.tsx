@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listSchedules } from "@/app/actions/scheduling";
 import { ScheduleBoard } from "./ScheduleBoard";
-import { NotificationBell } from "@/app/notifications/NotificationBell";
 
 function isoDaysFromNow(days: number): string {
   const d = new Date();
@@ -34,15 +32,7 @@ export default async function SchedulePage() {
 
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-8 p-6 sm:p-10">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Schedule</h1>
-        <div className="flex items-center gap-4">
-          <NotificationBell userId={profile.id} />
-          <Link href="/profile" className="text-sm underline underline-offset-4">
-            Back to profile
-          </Link>
-        </div>
-      </div>
+      <h1 className="text-xl font-semibold">Schedule</h1>
 
       <ScheduleBoard
         currentUserId={profile.id}

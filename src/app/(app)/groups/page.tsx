@@ -49,12 +49,7 @@ export default async function GroupsBrowsePage() {
 
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-10 p-6 sm:p-10">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Groups</h1>
-        <Link href="/chats" className="text-sm underline underline-offset-4">
-          Back to chats
-        </Link>
-      </div>
+      <h1 className="text-xl font-semibold">Groups</h1>
 
       {attentionSummary && <AttentionBanner summary={attentionSummary} />}
 

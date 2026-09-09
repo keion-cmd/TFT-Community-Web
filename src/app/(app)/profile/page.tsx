@@ -4,7 +4,6 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { signOut } from "@/app/actions/auth";
 import { ProfileEditForm } from "./ProfileEditForm";
-import { NotificationBell } from "@/app/notifications/NotificationBell";
 
 export default async function ProfilePage() {
   const profile = await getCurrentProfile();
@@ -15,14 +14,11 @@ export default async function ProfilePage() {
     <main className="mx-auto flex max-w-xl flex-col gap-8 p-6 sm:p-10">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Profile</h1>
-        <div className="flex items-center gap-4">
-          <NotificationBell userId={profile.id} />
-          <form action={signOut}>
-            <button type="submit" className="text-sm underline underline-offset-4">
-              Sign out
-            </button>
-          </form>
-        </div>
+        <form action={signOut}>
+          <button type="submit" className="text-sm underline underline-offset-4">
+            Sign out
+          </button>
+        </form>
       </div>
 
       <section className="flex flex-col gap-1 rounded-lg border border-black/[.08] dark:border-white/[.145] p-5">
