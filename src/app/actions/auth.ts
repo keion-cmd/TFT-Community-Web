@@ -11,6 +11,7 @@ import {
   requestPasswordResetSchema,
   resetPasswordSchema,
 } from "@/lib/validation/auth";
+import { checkRateLimit, rateLimitMessage, getClientIp } from "@/lib/rate-limit/rateLimit";
 import { actionError, type ActionState } from "./types";
 
 // Human-readable, status-specific messages — Phase 6-A: every non-active
@@ -33,10 +34,30 @@ const STATUS_MESSAGES: Record<Exclude<AccountStatus, "active">, ActionState> = {
   ),
 };
 
+// Phase 6-F starting limits, hardcoded (admin-tunable is out of scope for
+// this task): signUp 3/hour per IP, signIn 5/15min per IP+identifier,
+// requestPasswordReset 3/hour per email.
+const SIGNUP_LIMIT = 3;
+const SIGNUP_WINDOW_SECONDS = 60 * 60;
+const SIGNIN_LIMIT = 5;
+const SIGNIN_WINDOW_SECONDS = 15 * 60;
+const PASSWORD_RESET_LIMIT = 3;
+const PASSWORD_RESET_WINDOW_SECONDS = 60 * 60;
+
 export async function signUp(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  const ip = await getClientIp();
+  const signUpLimit = await checkRateLimit(
+    `signup:${ip}`,
+    SIGNUP_LIMIT,
+    SIGNUP_WINDOW_SECONDS,
+  );
+  if (!signUpLimit.allowed) {
+    return actionError("RATE_LIMITED", rateLimitMessage(signUpLimit.retryAfterSeconds));
+  }
+
   const parsed = signUpSchema.safeParse({
     email: formData.get("email"),
     username: formData.get("username"),
@@ -133,6 +154,17 @@ export async function signIn(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
+  const rawIdentifier = String(formData.get("identifier") ?? "").toLowerCase();
+  const ip = await getClientIp();
+  const signInLimit = await checkRateLimit(
+    `signin:${ip}:${rawIdentifier}`,
+    SIGNIN_LIMIT,
+    SIGNIN_WINDOW_SECONDS,
+  );
+  if (!signInLimit.allowed) {
+    return actionError("RATE_LIMITED", rateLimitMessage(signInLimit.retryAfterSeconds));
+  }
+
   const parsed = signInSchema.safeParse({
     identifier: formData.get("identifier"),
     password: formData.get("password"),
@@ -213,6 +245,24 @@ export async function requestPasswordReset(
       "VALIDATION_ERROR",
       parsed.error.issues[0]?.message ?? "Invalid input.",
     );
+  }
+
+  // Keyed on the (now-validated) email rather than IP, per Phase 6-F. Note
+  // this happens after the zod parse (unlike signIn/signUp) specifically so
+  // the limit is keyed on a normalized email, not arbitrary raw input.
+  const resetLimit = await checkRateLimit(
+    `pwreset:${parsed.data.email.toLowerCase()}`,
+    PASSWORD_RESET_LIMIT,
+    PASSWORD_RESET_WINDOW_SECONDS,
+  );
+  if (!resetLimit.allowed) {
+    // Deliberately still the generic { success: true } response, not a
+    // RATE_LIMITED error — this endpoint never confirms/denies anything
+    // about the email (Phase 6-A/no-enumeration), and an explicit
+    // rate-limit error would leak "this email/IP combo has been tried
+    // repeatedly," which isn't itself sensitive but breaks the "always the
+    // same response" invariant already documented below.
+    return { success: true };
   }
 
   const supabase = await createClient();

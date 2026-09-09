@@ -11,7 +11,12 @@ import {
   listBroadcastHistorySchema,
 } from "@/lib/validation/broadcast";
 import { processBroadcastTargets, type BroadcastRow } from "@/lib/broadcast/delivery";
+import { checkRateLimit, rateLimitMessage } from "@/lib/rate-limit/rateLimit";
 import type { ActionError, ActionState } from "./types";
+
+// Phase 6-F starting limit, hardcoded: sendBroadcast 10/hour per user.
+const SEND_BROADCAST_LIMIT = 10;
+const SEND_BROADCAST_WINDOW_SECONDS = 60 * 60;
 
 const AUTHZ_MESSAGES: Record<AuthorizationError["code"], ActionState> = {
   NOT_AUTHENTICATED: { error: { code: "NOT_AUTHENTICATED", message: "You must be signed in." } },
@@ -99,10 +104,22 @@ export async function sendBroadcast(
   targetGroupIds: number[],
   idempotencyKey: string,
 ): Promise<{ success: true; broadcastId: number } | { error: ActionError }> {
+  let admin;
   try {
-    await requireAdmin();
+    admin = await requireAdmin();
   } catch (err) {
     return fromAuthzError(err);
+  }
+
+  const broadcastLimit = await checkRateLimit(
+    `sendbroadcast:${admin.id}`,
+    SEND_BROADCAST_LIMIT,
+    SEND_BROADCAST_WINDOW_SECONDS,
+  );
+  if (!broadcastLimit.allowed) {
+    return {
+      error: { code: "RATE_LIMITED", message: rateLimitMessage(broadcastLimit.retryAfterSeconds) },
+    };
   }
 
   const parsed = sendBroadcastSchema.safeParse({ message, attachmentUrl, targetGroupIds, idempotencyKey });

@@ -18,6 +18,11 @@ import {
   removeMemberSchema,
   listMessagesSchema,
 } from "@/lib/validation/messaging";
+import { checkRateLimit, rateLimitMessage } from "@/lib/rate-limit/rateLimit";
+
+// Phase 6-F starting limit, hardcoded: sendMessage 30/min per user.
+const SEND_MESSAGE_LIMIT = 30;
+const SEND_MESSAGE_WINDOW_SECONDS = 60;
 import { actionError, type ActionState, type ActionError } from "./types";
 import { EDIT_WINDOW_MINUTES } from "@/lib/messaging/constants";
 
@@ -464,6 +469,17 @@ export async function sendMessage(
   } catch (err) {
     const state = fromAuthzError(err);
     return { error: state.error as ActionError };
+  }
+
+  const messageLimit = await checkRateLimit(
+    `sendmessage:${profile.id}`,
+    SEND_MESSAGE_LIMIT,
+    SEND_MESSAGE_WINDOW_SECONDS,
+  );
+  if (!messageLimit.allowed) {
+    return {
+      error: { code: "RATE_LIMITED", message: rateLimitMessage(messageLimit.retryAfterSeconds) },
+    };
   }
 
   const parsed = sendMessageSchema.safeParse({ target, content, attachments, replyToId });
