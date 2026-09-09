@@ -66,6 +66,12 @@ export default async function ProfilePage() {
           >
             Positions Manager →
           </Link>
+          <Link
+            href="/profile/admin/broadcast"
+            className="rounded-lg border border-black/[.08] dark:border-white/[.145] p-4 text-sm font-medium hover:bg-black/[.03] dark:hover:bg-white/[.05]"
+          >
+            Broadcast Center →
+          </Link>
         </section>
       )}
     </main>

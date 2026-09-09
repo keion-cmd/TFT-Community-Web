@@ -42,6 +42,9 @@ export default async function AdminMemberApprovalQueuePage() {
           <Link href="/profile/admin/positions" className="text-sm underline underline-offset-4">
             Positions Manager
           </Link>
+          <Link href="/profile/admin/broadcast" className="text-sm underline underline-offset-4">
+            Broadcast Center
+          </Link>
           <Link href="/profile" className="text-sm underline underline-offset-4">
             Back to profile
           </Link>
