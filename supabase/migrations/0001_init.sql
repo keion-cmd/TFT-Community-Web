@@ -94,14 +94,25 @@ create table position_history (
 -- with, and broader than, the trigger. Removed rather than fixed in place
 -- since the trigger alone is correct and sufficient.)
 
+drop trigger if exists trg_position_exclusivity on user_positions;
+
 create or replace function enforce_position_exclusivity() returns trigger as $$
 begin
-  if (select is_exclusive from positions where id = new.position_id) then
-    if exists (
-      select 1 from user_positions
-      where position_id = new.position_id and revoked_at is null
-    ) then
-      raise exception 'This position is exclusive and already has an active holder';
+  -- Only check when this row is becoming active (revoked_at is null on the
+  -- new row). A revoke (revoked_at going from null -> set) never conflicts
+  -- with anything and must be allowed through unchecked.
+  if new.revoked_at is null then
+    if (select is_exclusive from positions where id = new.position_id) then
+      if exists (
+        select 1 from user_positions
+        where position_id = new.position_id
+          and revoked_at is null
+          and id is distinct from new.id   -- exclude self, so reactivating
+                                            -- the same row isn't a false
+                                            -- conflict with itself
+      ) then
+        raise exception 'This position is exclusive and already has an active holder';
+      end if;
     end if;
   end if;
   return new;
@@ -109,7 +120,7 @@ end;
 $$ language plpgsql;
 
 create trigger trg_position_exclusivity
-  before insert on user_positions
+  before insert or update of revoked_at on user_positions
   for each row execute function enforce_position_exclusivity();
 
 -- ============================================================
