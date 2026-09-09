@@ -138,3 +138,136 @@ create policy "groups visible per type"
     ))
     or is_admin()
   );
+
+-- ============================================================
+-- Moderator/coordinator RPCs (docs/TFT-GroupOverview-RPC-Fix.md, found in
+-- T-CODE-10) — same SECURITY DEFINER + self-checked + audit_logs pattern as
+-- join_group / moderate_group_member / moderate_delete_message
+-- (docs/TFT-Messaging-RPC-Fix.md, 0001_init.sql).
+-- ============================================================
+
+-- 1. Moderator/coordinator/admin-gated group location edit (Admin's own path
+--    already works via direct UPDATE + the existing "groups updated by admin"
+--    policy; this RPC only needs to additionally cover the non-Admin case, but
+--    is written to also accept Admin so callers have one code path)
+create or replace function update_group_location(p_group_id bigint, p_location text)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select role_in_group into v_actor_role
+  from group_members where group_id = p_group_id and user_id = v_actor;
+
+  if not (is_admin() or v_actor_role in ('moderator','coordinator')) then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  update groups set location = p_location where id = p_group_id;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (v_actor, 'group_location_updated', 'group', p_group_id::text,
+    jsonb_build_object('location', p_location));
+end;
+$$;
+
+-- 2. Moderator/coordinator/admin-gated pin/unpin. Verifies the message
+--    actually belongs to the group before pinning (defense-in-depth backstop
+--    behind the app-layer check in pinMessage).
+create or replace function pin_message(p_group_id bigint, p_message_id bigint)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+  v_message_group bigint;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select role_in_group into v_actor_role
+  from group_members where group_id = p_group_id and user_id = v_actor;
+
+  if not (is_admin() or v_actor_role in ('moderator','coordinator')) then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  select group_id into v_message_group from messages where id = p_message_id and deleted_at is null;
+  if v_message_group is null or v_message_group <> p_group_id then
+    raise exception 'NOT_FOUND_OR_WRONG_GROUP';
+  end if;
+
+  update groups set pinned_message_id = p_message_id where id = p_group_id;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (v_actor, 'group_message_pinned', 'group', p_group_id::text,
+    jsonb_build_object('message_id', p_message_id));
+end;
+$$;
+
+create or replace function unpin_message(p_group_id bigint)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select role_in_group into v_actor_role
+  from group_members where group_id = p_group_id and user_id = v_actor;
+
+  if not (is_admin() or v_actor_role in ('moderator','coordinator')) then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  update groups set pinned_message_id = null where id = p_group_id;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (v_actor, 'group_message_unpinned', 'group', p_group_id::text, '{}'::jsonb);
+end;
+$$;
+
+-- 3. Resource removal by its own adder, when that adder holds no elevated
+--    role in the group (the admin/moderator/coordinator path is already
+--    covered by 0002_group_overview.sql's existing delete policy and does
+--    NOT need this RPC — removeGroupResource only calls this for the
+--    "adder, not otherwise privileged" case)
+create or replace function remove_own_group_resource(p_resource_id bigint)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_added_by uuid;
+begin
+  if v_actor is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select added_by into v_added_by from group_resources where id = p_resource_id;
+  if v_added_by is null then
+    raise exception 'NOT_FOUND';
+  end if;
+  if v_added_by <> v_actor then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  delete from group_resources where id = p_resource_id;
+end;
+$$;
