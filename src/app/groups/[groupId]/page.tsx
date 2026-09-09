@@ -28,7 +28,7 @@ export default async function GroupThreadPage({
   const supabase = await createClient();
   const { data: group } = await supabase
     .from("groups")
-    .select("id, name, type, description, location, archived_at")
+    .select("id, name, type, description, location, pinned_message_id, archived_at")
     .eq("id", groupId)
     .maybeSingle();
   if (!group) notFound();
@@ -71,15 +71,22 @@ export default async function GroupThreadPage({
     <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6 sm:p-10">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">{group.name}</h1>
+          <Link href={`/groups/${group.id}/overview`} className="hover:underline">
+            <h1 className="text-xl font-semibold">{group.name}</h1>
+          </Link>
           <p className="text-sm text-black/60 dark:text-white/60">
             {group.type}
             {group.location ? ` · ${group.location}` : ""}
           </p>
         </div>
-        <Link href="/chats" className="text-sm underline underline-offset-4">
-          Back to chats
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href={`/groups/${group.id}/overview`} className="text-sm underline underline-offset-4">
+            Overview
+          </Link>
+          <Link href="/chats" className="text-sm underline underline-offset-4">
+            Back to chats
+          </Link>
+        </div>
       </div>
 
       {group.archived_at && (
@@ -96,6 +103,7 @@ export default async function GroupThreadPage({
         initialMessages={initialMessages}
         canModerate={canModerate}
         isGroup
+        pinnedMessageId={group.pinned_message_id}
       />
 
       {canModerate && (

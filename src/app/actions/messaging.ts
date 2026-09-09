@@ -45,7 +45,7 @@ function dmPair(a: string, b: string): [string, string] {
 // group_members.role_in_group check constraint (supabase/migrations/0002_group_overview.sql)
 // allows 'member' | 'moderator' | 'coordinator'. Both moderator and
 // coordinator are treated as having moderation authority here.
-async function canModerateGroup(
+export async function canModerateGroup(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
   profile: ProfileWithRole,
   groupId: number,

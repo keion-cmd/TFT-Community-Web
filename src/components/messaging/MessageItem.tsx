@@ -24,6 +24,9 @@ type Props = {
   onEdit: (messageId: number, content: string) => Promise<{ success: true } | { error: { message: string } }>;
   onDelete: (messageId: number) => void;
   onToggleReaction: (messageId: number, emoji: string, reactedByMe: boolean) => void;
+  canPin?: boolean;
+  isPinned?: boolean;
+  onTogglePin?: (messageId: number) => void;
 };
 
 export function MessageItem({
@@ -36,6 +39,9 @@ export function MessageItem({
   onEdit,
   onDelete,
   onToggleReaction,
+  canPin = false,
+  isPinned = false,
+  onTogglePin,
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content ?? "");
@@ -71,6 +77,7 @@ export function MessageItem({
         {message.editedAt && !isDeleted && (
           <span className="text-xs text-black/40 dark:text-white/40">(edited)</span>
         )}
+        {isPinned && <span className="text-xs text-black/40 dark:text-white/40">📌 Pinned</span>}
       </div>
 
       {isEditing ? (
@@ -184,6 +191,15 @@ export function MessageItem({
               className="text-xs text-black/50 hover:underline dark:text-white/50"
             >
               Edit
+            </button>
+          )}
+          {canPin && onTogglePin && (
+            <button
+              type="button"
+              onClick={() => onTogglePin(message.id)}
+              className="text-xs text-black/50 hover:underline dark:text-white/50"
+            >
+              {isPinned ? "Unpin" : "Pin"}
             </button>
           )}
           {canDelete && (

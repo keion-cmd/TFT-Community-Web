@@ -14,6 +14,7 @@ import {
   type MessageTarget,
 } from "@/app/actions/messaging";
 import { EDIT_WINDOW_MINUTES } from "@/lib/messaging/constants";
+import { pinMessage, unpinMessage } from "@/app/actions/groupOverview";
 import { MessageItem } from "./MessageItem";
 
 function dmPair(a: string, b: string): [string, string] {
@@ -34,10 +35,21 @@ type Props = {
   initialMessages: MessageDTO[];
   canModerate: boolean;
   isGroup: boolean;
+  // Group threads only — undefined/null for DMs, where pinning doesn't apply.
+  pinnedMessageId?: number | null;
 };
 
-export function MessageThread({ target, currentUserId, initialMessages, canModerate, isGroup }: Props) {
+export function MessageThread({
+  target,
+  currentUserId,
+  initialMessages,
+  canModerate,
+  isGroup,
+  pinnedMessageId = null,
+}: Props) {
   const [messages, setMessages] = useState<MessageDTO[]>(initialMessages);
+  const [pinnedId, setPinnedId] = useState<number | null>(pinnedMessageId);
+  const [pinError, setPinError] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [replyTo, setReplyTo] = useState<MessageDTO | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -173,6 +185,22 @@ export function MessageThread({ target, currentUserId, initialMessages, canModer
     });
   }
 
+  function handleTogglePin(messageId: number) {
+    if (!("groupId" in target)) return;
+    setPinError(null);
+    startTransition(async () => {
+      const result =
+        pinnedId === messageId
+          ? await unpinMessage(target.groupId)
+          : await pinMessage(target.groupId, messageId);
+      if ("error" in result) {
+        setPinError(result.error.message);
+        return;
+      }
+      setPinnedId((prev) => (prev === messageId ? null : messageId));
+    });
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex max-h-[60vh] flex-col gap-1 overflow-y-auto rounded-lg border border-black/[.08] p-2 dark:border-white/[.145]">
@@ -193,11 +221,16 @@ export function MessageThread({ target, currentUserId, initialMessages, canModer
               onEdit={handleEdit}
               onDelete={handleDelete}
               onToggleReaction={handleToggleReaction}
+              canPin={isGroup && canModerate}
+              isPinned={pinnedId === m.id}
+              onTogglePin={handleTogglePin}
             />
           ))
         )}
         <div ref={bottomRef} />
       </div>
+
+      {pinError && <p className="text-sm text-red-600">{pinError}</p>}
 
       {replyTo && (
         <div className="flex items-center justify-between rounded border border-black/[.1] px-3 py-2 text-xs dark:border-white/[.15]">
