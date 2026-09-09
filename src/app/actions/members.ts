@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, AuthorizationError } from "@/lib/auth/session";
 import { SUPER_ADMIN_MIN_RANK, MIN_SUPER_ADMIN_COUNT } from "@/lib/auth/profile";
@@ -67,11 +68,12 @@ export async function approveMember(
     return actionError("ALREADY_REVIEWED", "This application was already reviewed.");
   }
 
-  const { error: updateError } = await supabaseAdmin
-    .from("profiles")
-    .update({ status: "active" })
-    .eq("id", userId);
-  if (updateError) {
+  const supabase = await createClient();
+  const { error: rpcError } = await supabase.rpc("set_member_status", {
+    p_user_id: userId,
+    p_new_status: "active",
+  });
+  if (rpcError) {
     return actionError("UPDATE_FAILED", "Could not approve this member.");
   }
 
@@ -93,13 +95,6 @@ export async function approveMember(
       })
       .eq("id", pendingApproval.id);
   }
-
-  await supabaseAdmin.from("audit_logs").insert({
-    actor_id: admin.id,
-    action: "member_approved",
-    target_type: "profile",
-    target_id: userId,
-  });
 
   await supabaseAdmin.from("notifications").insert({
     user_id: userId,
@@ -141,11 +136,13 @@ export async function rejectMember(
     return actionError("ALREADY_REVIEWED", "This application was already reviewed.");
   }
 
-  const { error: updateError } = await supabaseAdmin
-    .from("profiles")
-    .update({ status: "rejected" })
-    .eq("id", userId);
-  if (updateError) {
+  const supabase = await createClient();
+  const { error: rpcError } = await supabase.rpc("set_member_status", {
+    p_user_id: userId,
+    p_new_status: "rejected",
+    p_reason: reason ?? null,
+  });
+  if (rpcError) {
     return actionError("UPDATE_FAILED", "Could not reject this member.");
   }
 
@@ -168,14 +165,6 @@ export async function rejectMember(
       })
       .eq("id", pendingApproval.id);
   }
-
-  await supabaseAdmin.from("audit_logs").insert({
-    actor_id: admin.id,
-    action: "member_rejected",
-    target_type: "profile",
-    target_id: userId,
-    metadata: reason ? { reason } : null,
-  });
 
   revalidatePath("/profile/admin");
   return { success: true };
@@ -244,33 +233,25 @@ export async function suspendMember(
     }
   }
 
-  const { error: updateError } = await supabaseAdmin
-    .from("profiles")
-    .update({ status: "suspended" })
-    .eq("id", userId);
-  if (updateError) {
+  // set_member_status handles the profiles.status write, the audit_logs
+  // row, and revoking this user's `sessions` read-model rows (new status
+  // is one of suspended/disabled/removed) — see supabase/migrations/0001_init.sql.
+  const supabase = await createClient();
+  const { error: rpcError } = await supabase.rpc("set_member_status", {
+    p_user_id: userId,
+    p_new_status: "suspended",
+    p_reason: reason,
+  });
+  if (rpcError) {
     return actionError("UPDATE_FAILED", "Could not suspend this member.");
   }
 
-  // Immediate session revocation (Phase 6-D): ban prevents new sign-ins /
-  // token refreshes, and the local read-model reflects the revocation for
-  // the "active sessions" UI (a later phase). See PERMANENT_BAN_DURATION's
-  // comment above for the access-token caveat.
+  // GoTrue ban (Phase 6-D): prevents new sign-ins / token refreshes. This
+  // can only be done via the admin auth API, not SQL, so it stays on the
+  // service-role client. See PERMANENT_BAN_DURATION's comment above for
+  // the access-token caveat.
   await supabaseAdmin.auth.admin.updateUserById(userId, {
     ban_duration: PERMANENT_BAN_DURATION,
-  });
-  await supabaseAdmin
-    .from("sessions")
-    .update({ revoked_at: new Date().toISOString() })
-    .eq("user_id", userId)
-    .is("revoked_at", null);
-
-  await supabaseAdmin.from("audit_logs").insert({
-    actor_id: admin.id,
-    action: "member_suspended",
-    target_type: "profile",
-    target_id: userId,
-    metadata: { reason },
   });
 
   revalidatePath("/profile/admin");
@@ -281,9 +262,8 @@ export async function reinstateMember(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  let admin;
   try {
-    admin = await requireAdmin();
+    await requireAdmin();
   } catch (err) {
     return fromAuthzError(err);
   }
@@ -307,23 +287,17 @@ export async function reinstateMember(
     );
   }
 
-  const { error: updateError } = await supabaseAdmin
-    .from("profiles")
-    .update({ status: "active" })
-    .eq("id", userId);
-  if (updateError) {
+  const supabase = await createClient();
+  const { error: rpcError } = await supabase.rpc("set_member_status", {
+    p_user_id: userId,
+    p_new_status: "active",
+  });
+  if (rpcError) {
     return actionError("UPDATE_FAILED", "Could not reinstate this member.");
   }
 
   await supabaseAdmin.auth.admin.updateUserById(userId, {
     ban_duration: UNBAN_DURATION,
-  });
-
-  await supabaseAdmin.from("audit_logs").insert({
-    actor_id: admin.id,
-    action: "member_reinstated",
-    target_type: "profile",
-    target_id: userId,
   });
 
   revalidatePath("/profile/admin");

@@ -470,6 +470,84 @@ end;
 $$;
 
 -- ============================================================
+-- RPC: set_member_status
+-- Source: T-CODE-05. Admin member-status transitions (approve/reject/
+-- suspend/reinstate) previously went through the service-role client
+-- from a Server Action, bypassing RLS entirely and trusting the app
+-- layer alone. This funnels that write through a security-definer RPC
+-- instead, following the claim_schedule/check_in_schedule pattern above.
+-- Like those, it reads auth.uid() itself, so it must be invoked with the
+-- caller's own session client (the anon-key client from
+-- src/lib/supabase/server.ts), NOT the service-role client — a
+-- service-role call has no auth.uid() and would fail the is_admin() check.
+-- requireAdmin() in the app layer is still checked before this RPC is
+-- called; this is defense in depth, not a replacement for that check.
+-- ============================================================
+create or replace function set_member_status(
+  p_user_id uuid,
+  p_new_status text,
+  p_reason text default null
+)
+returns profiles
+language plpgsql
+security definer
+as $$
+declare
+  v_actor_id uuid := auth.uid();
+  v_previous_status text;
+  v_row profiles;
+begin
+  if v_actor_id is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not is_admin() then
+    raise exception 'NOT_AUTHORIZED';
+  end if;
+
+  -- Same set as the profiles.status check constraint above.
+  if p_new_status not in ('pending_approval','active','suspended','disabled','removed','rejected') then
+    raise exception 'INVALID_STATUS';
+  end if;
+
+  select status into v_previous_status from profiles where id = p_user_id;
+  if v_previous_status is null then
+    raise exception 'NOT_FOUND';
+  end if;
+
+  update profiles
+  set status = p_new_status
+  where id = p_user_id
+  returning * into v_row;
+
+  insert into audit_logs (actor_id, action, target_type, target_id, metadata)
+  values (
+    v_actor_id,
+    'member_status_changed',
+    'profile',
+    p_user_id::text,
+    jsonb_strip_nulls(jsonb_build_object(
+      'previous_status', v_previous_status,
+      'new_status', p_new_status,
+      'reason', p_reason
+    ))
+  );
+
+  -- Immediate session read-model revocation, matching the sessions table's
+  -- documented revoke triggers (see sessions comment above): suspend,
+  -- disable, and removal all cut off access the same way.
+  if p_new_status in ('suspended','disabled','removed') then
+    update sessions
+    set revoked_at = now()
+    where user_id = p_user_id
+      and revoked_at is null;
+  end if;
+
+  return v_row;
+end;
+$$;
+
+-- ============================================================
 -- RLS — helper functions
 -- Source: TFT-Phase3-Database.md section D, verbatim.
 -- ============================================================
