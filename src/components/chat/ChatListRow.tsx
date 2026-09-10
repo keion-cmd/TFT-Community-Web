@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge } from "@/components/ui/Badge";
+import { useIsOnline } from "@/components/presence/PresenceProvider";
 
 export interface ChatListRowData {
   key: string;
@@ -11,6 +12,10 @@ export interface ChatListRowData {
   unreadCount: number;
   isPinned: boolean;
   isActive?: boolean;
+  // DM rows only — the other participant's id, used to look up their
+  // Presence state. Undefined for group rows: a group has many members, so
+  // no single "online" dot applies to its avatar.
+  presenceUserId?: string;
 }
 
 type Props = {
@@ -22,6 +27,8 @@ type Props = {
 // (T-CODE-39) — keep in sync with any future avatar/badge changes rather
 // than forking a second copy per surface.
 export function ChatListRow({ row, onTogglePin }: Props) {
+  const isOnline = useIsOnline(row.presenceUserId);
+
   return (
     <li className="flex items-center gap-2">
       <Link
@@ -31,7 +38,7 @@ export function ChatListRow({ row, onTogglePin }: Props) {
           row.isActive ? "bg-surface-hover" : "hover:bg-surface-hover"
         }`}
       >
-        <Avatar name={row.title} />
+        <Avatar name={row.title} online={row.presenceUserId ? isOnline : undefined} />
 
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-1">

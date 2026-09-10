@@ -132,6 +132,7 @@ export default async function GroupThreadPage({
         <MessageThread
           target={{ groupId }}
           currentUserId={profile.id}
+          currentUserDisplayName={profile.displayName}
           initialMessages={initialMessages}
           canModerate={canModerate}
           isGroup
