@@ -11,6 +11,7 @@ import {
   assignGroupCoordinatorSchema,
   removeGroupCoordinatorSchema,
   updateGroupLocationSchema,
+  updateGroupSlowModeSchema,
   pinMessageSchema,
   unpinMessageSchema,
   addGroupResourceSchema,
@@ -538,6 +539,57 @@ export async function updateGroupLocation(
       return actionError("NOT_AUTHORIZED", "You do not have permission to do this.");
     }
     return actionError("UPDATE_FAILED", "Could not update this group's location.");
+  }
+
+  revalidatePath(`/groups/${groupId}/overview`);
+  return { success: true };
+}
+
+// ============================================================
+// updateGroupSlowMode — T-CODE-40 Part 5. Same moderator/coordinator/admin
+// gate as updateGroupLocation, but calls the update_group_slow_mode RPC
+// unconditionally (rather than that function's admin-direct/moderator-RPC
+// split): this migration ships already applied, so there is no
+// "pending migration" window to work around, and the RPC itself already
+// accepts Admins (is_admin() OR moderator/coordinator) — one code path is
+// simplest and matches the RPC's own authorization exactly.
+// ============================================================
+export async function updateGroupSlowMode(
+  _prevState: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  let actor;
+  try {
+    actor = await requireActiveUser();
+  } catch (err) {
+    return fromAuthzError(err);
+  }
+
+  const parsed = updateGroupSlowModeSchema.safeParse({
+    groupId: formData.get("groupId"),
+    seconds: formData.get("seconds"),
+  });
+  if (!parsed.success) {
+    return actionError("VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Invalid request.");
+  }
+  const { groupId, seconds } = parsed.data;
+
+  const supabaseAdmin = createAdminClient();
+  const isAdmin = actor.roleRank >= ADMIN_MIN_RANK;
+  if (!isAdmin && !(await canModerateGroup(supabaseAdmin, actor, groupId))) {
+    return actionError("NOT_AUTHORIZED", "You do not have permission to do this.");
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("update_group_slow_mode", {
+    p_group_id: groupId,
+    p_seconds: seconds,
+  });
+  if (error) {
+    if (error.message?.includes("NOT_AUTHORIZED")) {
+      return actionError("NOT_AUTHORIZED", "You do not have permission to do this.");
+    }
+    return actionError("UPDATE_FAILED", "Could not update slow mode for this group.");
   }
 
   revalidatePath(`/groups/${groupId}/overview`);
