@@ -116,13 +116,13 @@ export async function signUp(
   // session: if this Supabase project requires email confirmation,
   // signUp() returns no session, so `profiles`'s self-only insert policy
   // (auth.uid() = id) would have nothing to authenticate against yet.
-  // Registration must land the account in pending_approval either way.
+  // New accounts are active immediately — no admin approval gate.
   const { error: profileError } = await admin.from("profiles").insert({
     id: newUserId,
     username,
     display_name: username,
     role_id: 1, // Member — hardcoded server-side, never accepted from the client (spec §6)
-    status: "pending_approval",
+    status: "active",
   });
   if (profileError) {
     // Avoid leaving a signed-in session with no profile row behind — a
@@ -135,10 +135,8 @@ export async function signUp(
     );
   }
 
-  await admin.from("approvals").insert({
-    user_id: newUserId,
-    status: "pending",
-  });
+  // No approvals row: new accounts are active immediately, so there is
+  // nothing for the Member Approval Queue to pick up.
 
   // No confirmed session yet (email confirmation required) — send the user
   // to sign in once they've confirmed, rather than a page that assumes an
@@ -147,7 +145,7 @@ export async function signUp(
     redirect("/login?registered=1");
   }
 
-  redirect("/pending-approval");
+  redirect("/profile");
 }
 
 export async function signIn(

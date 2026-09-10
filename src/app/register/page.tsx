@@ -11,7 +11,7 @@ export default function RegisterPage() {
         <div className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold text-foreground">Create an account</h1>
           <p className="text-sm text-muted-foreground">
-            Your account will wait for admin approval before you can sign in.
+            You&apos;ll get instant access once you sign up.
           </p>
         </div>
 
