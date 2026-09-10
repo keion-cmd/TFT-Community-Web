@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { ChatListRow, type ChatListRowData } from "./ChatListRow";
 import {
   listMyGroups,
   listMyDirectMessages,
@@ -75,6 +76,7 @@ type Props = {
 };
 
 export function ChatsList({ currentUserId, initialGroups, initialDms, initialPinned }: Props) {
+  const pathname = usePathname();
   const [rows, setRows] = useState<ChatRow[]>(() => toRows(initialGroups, initialDms, initialPinned));
   const groupIdsRef = useRef(initialGroups.map((g) => g.id));
   const hasSubscribedOnce = useRef(false);
@@ -160,45 +162,26 @@ export function ChatsList({ currentUserId, initialGroups, initialDms, initialPin
   }, [currentUserId]);
 
   if (rows.length === 0) {
-    return <p className="text-sm text-black/60 dark:text-white/60">No conversations yet.</p>;
+    return <p className="text-sm text-muted-foreground">No conversations yet.</p>;
+  }
+
+  function toRowData(row: ChatRow): ChatListRowData {
+    return {
+      key: row.key,
+      href: row.href,
+      title: row.title,
+      preview: row.preview,
+      lastMessageAtLabel: formatTime(row.lastMessageAt),
+      unreadCount: row.unreadCount,
+      isPinned: row.isPinned,
+      isActive: pathname === row.href,
+    };
   }
 
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="flex flex-col gap-1">
       {rows.map((row) => (
-        <li key={row.key} className="flex items-center gap-2">
-          <Link
-            href={row.href}
-            className="flex flex-1 items-center justify-between gap-3 rounded-lg border border-black/[.08] p-4 hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
-          >
-            <div className="flex flex-col">
-              <span className="flex items-center gap-1 font-medium">
-                {row.isPinned && <span aria-hidden="true">📌</span>}
-                {row.title}
-              </span>
-              <span className="text-sm text-black/60 dark:text-white/60">
-                {row.preview ?? "No messages yet"}
-              </span>
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              <span className="text-xs text-black/40 dark:text-white/40">{formatTime(row.lastMessageAt)}</span>
-              {row.unreadCount > 0 && (
-                <span className="rounded-full bg-foreground px-2 py-0.5 text-xs font-medium text-background">
-                  {row.unreadCount}
-                </span>
-              )}
-            </div>
-          </Link>
-          <button
-            type="button"
-            onClick={() => handleTogglePin(row)}
-            aria-label={row.isPinned ? "Unpin chat" : "Pin chat"}
-            title={row.isPinned ? "Unpin chat" : "Pin chat"}
-            className="rounded-lg border border-black/[.08] p-2 text-sm hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
-          >
-            {row.isPinned ? "📌" : "📍"}
-          </button>
-        </li>
+        <ChatListRow key={row.key} row={toRowData(row)} onTogglePin={() => handleTogglePin(row)} />
       ))}
     </ul>
   );

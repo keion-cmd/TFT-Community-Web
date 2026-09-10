@@ -43,29 +43,29 @@ export function ChatSearch() {
           runSearch(e.target.value);
         }}
         placeholder="Search messages…"
-        className="rounded border border-black/[.1] bg-transparent px-3 py-2 text-sm dark:border-white/[.15]"
+        className="rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent"
       />
 
-      {isPending && <p className="text-xs text-black/50 dark:text-white/50">Searching…</p>}
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {isPending && <p className="text-xs text-muted-foreground">Searching…</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
 
       {results && (
-        <ul className="flex flex-col gap-1 rounded-lg border border-black/[.08] p-2 dark:border-white/[.145]">
+        <ul className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-2">
           {results.length === 0 ? (
-            <li className="p-2 text-sm text-black/50 dark:text-white/50">No messages found.</li>
+            <li className="p-2 text-sm text-muted-foreground">No messages found.</li>
           ) : (
             results.map((r) => (
               <li key={r.messageId}>
                 <Link
                   href={r.href}
-                  className="flex flex-col gap-0.5 rounded p-2 text-sm hover:bg-black/[.03] dark:hover:bg-white/[.05]"
+                  className="flex flex-col gap-0.5 rounded p-2 text-sm hover:bg-surface-hover"
                 >
                   <span className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{r.chatLabel}</span>
-                    <span className="text-xs text-black/40 dark:text-white/40">{formatTime(r.createdAt)}</span>
+                    <span className="font-medium text-foreground">{r.chatLabel}</span>
+                    <span className="text-xs text-muted-foreground">{formatTime(r.createdAt)}</span>
                   </span>
-                  <span className="text-black/70 dark:text-white/70">
-                    <span className="text-black/50 dark:text-white/50">{r.senderDisplayName}: </span>
+                  <span className="text-foreground/80">
+                    <span className="text-muted-foreground">{r.senderDisplayName}: </span>
                     {r.snippet}
                   </span>
                 </Link>
