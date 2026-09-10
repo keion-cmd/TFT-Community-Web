@@ -47,6 +47,10 @@ export type RemoveGroupCoordinatorInput = z.infer<typeof removeGroupCoordinatorS
 export const updateGroupLocationSchema = z.object({ groupId, location });
 export type UpdateGroupLocationInput = z.infer<typeof updateGroupLocationSchema>;
 
+const slowModeSeconds = z.coerce.number().int().min(0, "Slow mode cannot be negative");
+export const updateGroupSlowModeSchema = z.object({ groupId, seconds: slowModeSeconds });
+export type UpdateGroupSlowModeInput = z.infer<typeof updateGroupSlowModeSchema>;
+
 export const pinMessageSchema = z.object({ groupId, messageId });
 export type PinMessageInput = z.infer<typeof pinMessageSchema>;
 

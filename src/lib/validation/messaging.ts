@@ -8,6 +8,7 @@ import { z } from "zod";
 const groupId = z.coerce.number().int().positive("Invalid group");
 const messageId = z.coerce.number().int().positive("Invalid message");
 const userId = z.string().uuid("Invalid user id");
+const topicId = z.coerce.number().int().positive("Invalid topic");
 
 const groupName = z
   .string()
@@ -58,12 +59,21 @@ export type CreateGroupInput = z.infer<typeof createGroupSchema>;
 export const joinGroupSchema = z.object({ groupId });
 export type JoinGroupInput = z.infer<typeof joinGroupSchema>;
 
-export const sendMessageSchema = z.object({
-  target: messageTarget,
-  content: messageContent,
-  attachments: z.array(attachment).max(10).optional(),
-  replyToId: messageId.optional(),
-});
+// topicId is only meaningful for a group target (topics belong to a group);
+// the refine below rejects a topicId paired with a DM target rather than
+// silently ignoring it.
+export const sendMessageSchema = z
+  .object({
+    target: messageTarget,
+    content: messageContent,
+    attachments: z.array(attachment).max(10).optional(),
+    replyToId: messageId.optional(),
+    topicId: topicId.optional(),
+    isSavedMessages: z.boolean().optional().default(false),
+  })
+  .refine((v) => v.topicId == null || "groupId" in v.target, {
+    message: "Topics only apply to group messages.",
+  });
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 
 export const editMessageSchema = z.object({

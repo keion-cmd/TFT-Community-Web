@@ -493,6 +493,8 @@ export async function sendMessage(
   content: string,
   attachments?: { storagePath: string; mimeType: string; sizeBytes: number }[],
   replyToId?: number,
+  topicId?: number,
+  isSavedMessages = false,
 ): Promise<{ success: true; message: MessageDTO } | { error: ActionError }> {
   let profile;
   try {
@@ -513,7 +515,14 @@ export async function sendMessage(
     };
   }
 
-  const parsed = sendMessageSchema.safeParse({ target, content, attachments, replyToId });
+  const parsed = sendMessageSchema.safeParse({
+    target,
+    content,
+    attachments,
+    replyToId,
+    topicId,
+    isSavedMessages,
+  });
   if (!parsed.success) {
     return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
   }
@@ -528,7 +537,7 @@ export async function sendMessage(
     const groupId = parsed.data.target.groupId;
     const { data: membership } = await supabaseAdmin
       .from("group_members")
-      .select("muted_until")
+      .select("muted_until, role_in_group")
       .eq("group_id", groupId)
       .eq("user_id", profile.id)
       .maybeSingle();
@@ -538,10 +547,65 @@ export async function sendMessage(
     if (membership.muted_until && new Date(membership.muted_until) > new Date()) {
       return { error: { code: "MUTED", message: "You are muted in this group." } };
     }
+
+    // Slow mode (T-CODE-40 Part 5): moderators/coordinators/admins of THIS
+    // group are exempt from their own group's slow mode; a regular member
+    // must wait slow_mode_seconds between their own messages in this group.
+    const isExemptFromSlowMode =
+      profile.roleRank >= ADMIN_MIN_RANK ||
+      membership.role_in_group === "moderator" ||
+      membership.role_in_group === "coordinator";
+    if (!isExemptFromSlowMode) {
+      const { data: group } = await supabaseAdmin
+        .from("groups")
+        .select("slow_mode_seconds")
+        .eq("id", groupId)
+        .maybeSingle();
+      if (group && group.slow_mode_seconds > 0) {
+        const { data: lastMessage } = await supabaseAdmin
+          .from("messages")
+          .select("created_at")
+          .eq("group_id", groupId)
+          .eq("sender_id", profile.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (lastMessage) {
+          const elapsedSeconds = (Date.now() - new Date(lastMessage.created_at).getTime()) / 1000;
+          if (elapsedSeconds < group.slow_mode_seconds) {
+            const retryAfterSeconds = Math.ceil(group.slow_mode_seconds - elapsedSeconds);
+            return {
+              error: {
+                code: "SLOW_MODE_ACTIVE",
+                message: `Slow mode is active in this group. Try again in ${retryAfterSeconds}s.`,
+              },
+            };
+          }
+        }
+      }
+    }
+
+    if (parsed.data.topicId != null) {
+      const { data: topic } = await supabaseAdmin
+        .from("topics")
+        .select("id, group_id, archived_at")
+        .eq("id", parsed.data.topicId)
+        .maybeSingle();
+      if (!topic || topic.group_id !== groupId) {
+        return { error: { code: "INVALID_TOPIC", message: "That topic does not belong to this group." } };
+      }
+      if (topic.archived_at) {
+        return { error: { code: "TOPIC_ARCHIVED", message: "This topic is archived." } };
+      }
+      insertRow.topic_id = parsed.data.topicId;
+    }
+
     insertRow.group_id = groupId;
   } else {
     const recipientId = parsed.data.target.recipientId;
-    if (recipientId === profile.id) {
+    // Self-target is rejected by default; the Saved Messages entry point is
+    // the sole caller allowed to pass isSavedMessages: true to bypass this.
+    if (recipientId === profile.id && !parsed.data.isSavedMessages) {
       return { error: { code: "INVALID_TARGET", message: "You cannot message yourself." } };
     }
     const { data: recipient } = await supabaseAdmin
@@ -1203,6 +1267,42 @@ export async function listMyDirectMessages(): Promise<{ dms: DmChatSummary[] } |
     unreadCount: unreadByPartner.get(id) ?? 0,
   }));
   return { dms };
+}
+
+// ============================================================
+// getOrCreateSavedMessagesThread — T-CODE-40 Part 3. "Saved messages" is a
+// DM thread where dm_user_a = dm_user_b = the user's own id, reusing all
+// existing DM machinery rather than a new table/concept. There is nothing
+// to actually "create": DM threads aren't a row, they're implied by
+// messages rows (same as every other DM thread in this schema), so this
+// just resolves the routing identifier — the self-DM IS the user's own id.
+//
+// Verified for this: dmPair(a, a) returns [a, a] without error (a < a is
+// false, so it takes the `b < a` branch, giving [b, a] = [a, a]); the
+// messages check constraint (0001_init.sql) only requires dm_user_a/
+// dm_user_b to both be non-null, never that they differ; and both
+// "messages readable by participants" and "messages sent by authenticated
+// participants" RLS policies are OR'd conditions that pass when
+// dm_user_a = dm_user_b = auth.uid(). No migration was needed for this.
+//
+// KNOWN GAP (see T-CODE-40 report BLOCKED ITEMS): sendMessage() still has
+// its own `recipientId === profile.id` guard (this task's instructions
+// explicitly forbid touching sendMessage beyond topicId/slow-mode), so
+// actually sending a message into this thread will currently be rejected
+// with INVALID_TARGET until that guard is revisited in the UI follow-up.
+// ============================================================
+export async function getOrCreateSavedMessagesThread(): Promise<
+  { success: true; recipientId: string } | { error: ActionError }
+> {
+  let profile;
+  try {
+    profile = await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  return { success: true, recipientId: profile.id };
 }
 
 // ============================================================
