@@ -130,12 +130,38 @@ export function MessageItem({
       )}
 
       {!isDeleted && message.attachments.length > 0 && (
-        <ul className="flex flex-col gap-1">
-          {message.attachments.map((a) => (
-            <li key={a.id} className="text-xs text-black/50 dark:text-white/50">
-              📎 {a.storagePath}
-            </li>
-          ))}
+        <ul className="flex flex-wrap gap-2">
+          {message.attachments.map((a) => {
+            const isImage = a.mimeType.startsWith("image/");
+            if (isImage && a.url) {
+              return (
+                <li key={a.id}>
+                  <a href={a.url} target="_blank" rel="noreferrer">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- private, signed, short-lived Supabase Storage URL; next/image's remote loader isn't worth wiring up for that */}
+                    <img
+                      src={a.url}
+                      alt={a.fileName}
+                      className="max-h-48 max-w-full rounded border border-black/[.08] object-contain dark:border-white/[.145]"
+                    />
+                  </a>
+                </li>
+              );
+            }
+            return (
+              <li key={a.id} className="text-xs text-black/50 dark:text-white/50">
+                {a.url ? (
+                  <a href={a.url} target="_blank" rel="noreferrer" className="underline underline-offset-4">
+                    📎 {a.fileName}
+                  </a>
+                ) : (
+                  <span>📎 {a.fileName} (unavailable)</span>
+                )}
+                <span className="ml-1 text-black/30 dark:text-white/30">
+                  {(a.sizeBytes / 1024).toFixed(0)} KB
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
 

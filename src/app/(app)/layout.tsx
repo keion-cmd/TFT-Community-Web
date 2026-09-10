@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { BottomNav } from "@/components/nav/BottomNav";
+import { PresenceProvider } from "@/components/presence/PresenceProvider";
 import { NotificationBell } from "./notifications/NotificationBell";
 
 // Shared shell for every authenticated screen — per
@@ -15,15 +16,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (profile.status !== "active") redirect("/pending-approval");
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
-        <span className="text-sm font-semibold tracking-wide text-accent">TFT</span>
-        <NotificationBell userId={profile.id} />
-      </header>
+    <PresenceProvider currentUserId={profile.id}>
+      <div className="flex min-h-screen flex-col">
+        <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+          <span className="text-sm font-semibold tracking-wide text-accent">TFT</span>
+          <NotificationBell userId={profile.id} />
+        </header>
 
-      <div className="flex-1 pb-16">{children}</div>
+        <div className="flex-1 pb-16">{children}</div>
 
-      <BottomNav />
-    </div>
+        <BottomNav />
+      </div>
+    </PresenceProvider>
   );
 }

@@ -38,8 +38,11 @@ const emoji = z
 
 const attachment = z.object({
   storagePath: z.string().trim().min(1),
+  fileName: z.string().trim().min(1).max(255),
   mimeType: z.string().trim().min(1),
-  sizeBytes: z.coerce.number().int().nonnegative(),
+  sizeBytes: z.coerce.number().int().positive(),
+  width: z.coerce.number().int().positive().optional(),
+  height: z.coerce.number().int().positive().optional(),
 });
 
 // sendMessage's target is XOR by construction (a discriminated union), same
@@ -59,17 +62,27 @@ export type CreateGroupInput = z.infer<typeof createGroupSchema>;
 export const joinGroupSchema = z.object({ groupId });
 export type JoinGroupInput = z.infer<typeof joinGroupSchema>;
 
+// Unlike editMessageSchema's content (which always requires text — there's
+// no way to edit a message's attachments), sendMessage allows empty content
+// when the message carries at least one attachment (an image/file with no
+// caption), checked by the first refine below.
+const sendMessageContent = z.string().trim().max(4000, "Message must be at most 4000 characters");
+
 // topicId is only meaningful for a group target (topics belong to a group);
 // the refine below rejects a topicId paired with a DM target rather than
 // silently ignoring it.
 export const sendMessageSchema = z
   .object({
     target: messageTarget,
-    content: messageContent,
+    content: sendMessageContent,
     attachments: z.array(attachment).max(10).optional(),
     replyToId: messageId.optional(),
     topicId: topicId.optional(),
     isSavedMessages: z.boolean().optional().default(false),
+  })
+  .refine((v) => v.content.length > 0 || (v.attachments != null && v.attachments.length > 0), {
+    message: "Message cannot be empty.",
+    path: ["content"],
   })
   .refine((v) => v.topicId == null || "groupId" in v.target, {
     message: "Topics only apply to group messages.",

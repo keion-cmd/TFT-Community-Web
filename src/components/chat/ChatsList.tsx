@@ -25,6 +25,7 @@ type ChatRow = {
   unreadCount: number;
   pinTarget: { groupId: number } | { userId: string };
   isPinned: boolean;
+  presenceUserId?: string;
 };
 
 function toRows(groups: GroupChatSummary[], dms: DmChatSummary[], pinned: PinnedChats): ChatRow[] {
@@ -52,6 +53,7 @@ function toRows(groups: GroupChatSummary[], dms: DmChatSummary[], pinned: Pinned
     unreadCount: d.unreadCount,
     pinTarget: { userId: d.otherUserId },
     isPinned: pinnedDmUserIds.has(d.otherUserId),
+    presenceUserId: d.otherUserId,
   }));
 
   return [...groupRows, ...dmRows].sort((a, b) => {
@@ -175,6 +177,7 @@ export function ChatsList({ currentUserId, initialGroups, initialDms, initialPin
       unreadCount: row.unreadCount,
       isPinned: row.isPinned,
       isActive: pathname === row.href,
+      presenceUserId: row.presenceUserId,
     };
   }
 

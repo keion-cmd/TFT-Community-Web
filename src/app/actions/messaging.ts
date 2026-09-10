@@ -22,6 +22,28 @@ import {
   pinChatSchema,
 } from "@/lib/validation/messaging";
 import { checkRateLimit, rateLimitMessage } from "@/lib/rate-limit/rateLimit";
+import {
+  ATTACHMENT_BUCKET,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  validateAttachmentMeta,
+} from "@/lib/messaging/attachments";
+
+const ATTACHMENT_SIGNED_URL_TTL_SECONDS = 60 * 10; // 10 minutes — long enough to render/download a thread view
+
+async function signAttachmentUrls(
+  supabaseAdmin: ReturnType<typeof createAdminClient>,
+  paths: string[],
+): Promise<Map<string, string>> {
+  const byPath = new Map<string, string>();
+  if (paths.length === 0) return byPath;
+  const { data } = await supabaseAdmin.storage
+    .from(ATTACHMENT_BUCKET)
+    .createSignedUrls(paths, ATTACHMENT_SIGNED_URL_TTL_SECONDS);
+  for (const entry of data ?? []) {
+    if (entry.path && entry.signedUrl) byPath.set(entry.path, entry.signedUrl);
+  }
+  return byPath;
+}
 
 // Phase 6-F starting limit, hardcoded: sendMessage 30/min per user.
 const SEND_MESSAGE_LIMIT = 30;
@@ -321,6 +343,20 @@ export async function removeMember(
 // fetch and the client's reconnect-refetch (Phase 5-E: reconnect = refetch,
 // never replay).
 // ============================================================
+export type MessageAttachmentDTO = {
+  id: number;
+  storagePath: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  width: number | null;
+  height: number | null;
+  // Short-lived signed URL, generated at fetch time (bucket is private —
+  // see 0012_message_attachments_storage.sql). Never persisted; re-derive
+  // rather than caching past its expiry.
+  url: string | null;
+};
+
 export type MessageDTO = {
   id: number;
   senderId: string;
@@ -333,7 +369,7 @@ export type MessageDTO = {
   replyToId: number | null;
   replyPreview: string | null;
   forwardedFromMessageId: number | null;
-  attachments: { id: number; storagePath: string; mimeType: string; sizeBytes: number }[];
+  attachments: MessageAttachmentDTO[];
   reactions: { emoji: string; count: number; reactedByMe: boolean }[];
 };
 
@@ -424,7 +460,7 @@ export async function listMessages(
           }),
       supabaseAdmin
         .from("message_attachments")
-        .select("id, message_id, storage_path, mime_type, size_bytes")
+        .select("id, message_id, storage_path, file_name, mime_type, size_bytes, width, height")
         .in("message_id", messageIds),
       supabaseAdmin
         .from("message_reactions")
@@ -435,13 +471,24 @@ export async function listMessages(
   const senderById = new Map((senders ?? []).map((s) => [s.id, s]));
   const replyById = new Map((replySources ?? []).map((r) => [r.id, r]));
 
-  const attachmentsByMessage = new Map<
-    number,
-    { id: number; storagePath: string; mimeType: string; sizeBytes: number }[]
-  >();
+  const signedUrlByPath = await signAttachmentUrls(
+    supabaseAdmin,
+    (attachments ?? []).map((a) => a.storage_path),
+  );
+
+  const attachmentsByMessage = new Map<number, MessageAttachmentDTO[]>();
   for (const a of attachments ?? []) {
     const list = attachmentsByMessage.get(a.message_id) ?? [];
-    list.push({ id: a.id, storagePath: a.storage_path, mimeType: a.mime_type, sizeBytes: a.size_bytes });
+    list.push({
+      id: a.id,
+      storagePath: a.storage_path,
+      fileName: a.file_name,
+      mimeType: a.mime_type,
+      sizeBytes: a.size_bytes,
+      width: a.width,
+      height: a.height,
+      url: signedUrlByPath.get(a.storage_path) ?? null,
+    });
     attachmentsByMessage.set(a.message_id, list);
   }
 
@@ -492,7 +539,14 @@ export async function listMessages(
 export async function sendMessage(
   target: MessageTarget,
   content: string,
-  attachments?: { storagePath: string; mimeType: string; sizeBytes: number }[],
+  attachments?: {
+    storagePath: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    width?: number;
+    height?: number;
+  }[],
   replyToId?: number,
   topicId?: number,
   isSavedMessages = false,
@@ -533,9 +587,14 @@ export async function sendMessage(
     sender_id: profile.id,
     content: parsed.data.content,
   };
+  // Storage object path prefix this conversation's uploads must live under
+  // (see 0012_message_attachments_storage.sql) — computed here so attachment
+  // rows can be checked against it below, before the message is inserted.
+  let conversationPrefix: string;
 
   if ("groupId" in parsed.data.target) {
     const groupId = parsed.data.target.groupId;
+    conversationPrefix = `group/${groupId}/`;
     const { data: membership } = await supabaseAdmin
       .from("group_members")
       .select("muted_until, role_in_group")
@@ -620,6 +679,7 @@ export async function sendMessage(
     const [lo, hi] = dmPair(profile.id, recipientId);
     insertRow.dm_user_a = lo;
     insertRow.dm_user_b = hi;
+    conversationPrefix = `dm/${lo}/${hi}/`;
   }
 
   if (parsed.data.replyToId != null) {
@@ -640,6 +700,40 @@ export async function sendMessage(
     insertRow.reply_to_id = parsed.data.replyToId;
   }
 
+  // Re-validate attachment metadata server-side (mime/extension/size) and
+  // confirm each object was actually uploaded to a path scoped to this
+  // conversation — a client could otherwise pass an arbitrary storage_path
+  // (e.g. one it was only ever granted a signed upload URL for in a
+  // different conversation) since message_attachments' own insert RLS only
+  // checks the message's sender, not the path. Storage RLS would already
+  // reject reads/writes outside the caller's own conversations, but this
+  // check catches a mismatched path before it's ever linked to a message.
+  if (parsed.data.attachments && parsed.data.attachments.length > 0) {
+    for (const a of parsed.data.attachments) {
+      const validation = validateAttachmentMeta(a);
+      if (!validation.ok) {
+        return { error: { code: "INVALID_ATTACHMENT", message: validation.message } };
+      }
+      if (!a.storagePath.startsWith(conversationPrefix)) {
+        return { error: { code: "INVALID_ATTACHMENT", message: "Attachment does not belong to this conversation." } };
+      }
+    }
+    if (parsed.data.attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      return { error: { code: "INVALID_ATTACHMENT", message: "Too many attachments." } };
+    }
+    for (const a of parsed.data.attachments) {
+      const objectName = a.storagePath.slice(conversationPrefix.length);
+      const { data: found } = await supabaseAdmin.storage
+        .from(ATTACHMENT_BUCKET)
+        .list(conversationPrefix.replace(/\/$/, ""), { limit: 1, search: objectName });
+      if (!found || !found.some((o) => o.name === objectName)) {
+        return {
+          error: { code: "INVALID_ATTACHMENT", message: "Attachment upload was not found. Try uploading again." },
+        };
+      }
+    }
+  }
+
   const supabase = await createClient();
   const { data: inserted, error } = await supabase
     .from("messages")
@@ -655,11 +749,19 @@ export async function sendMessage(
       parsed.data.attachments.map((a) => ({
         message_id: inserted.id,
         storage_path: a.storagePath,
+        file_name: a.fileName,
         mime_type: a.mimeType,
         size_bytes: a.sizeBytes,
+        width: a.width ?? null,
+        height: a.height ?? null,
       })),
     );
   }
+
+  const sentAttachmentUrls = await signAttachmentUrls(
+    supabaseAdmin,
+    (parsed.data.attachments ?? []).map((a) => a.storagePath),
+  );
 
   const message: MessageDTO = {
     id: inserted.id,
@@ -676,8 +778,12 @@ export async function sendMessage(
     attachments: (parsed.data.attachments ?? []).map((a, i) => ({
       id: -1 - i,
       storagePath: a.storagePath,
+      fileName: a.fileName,
       mimeType: a.mimeType,
       sizeBytes: a.sizeBytes,
+      width: a.width ?? null,
+      height: a.height ?? null,
+      url: sentAttachmentUrls.get(a.storagePath) ?? null,
     })),
     reactions: [],
   };
@@ -806,8 +912,9 @@ export async function forwardMessage(
   targetGroupId?: number,
   targetUserId?: string,
 ): Promise<{ success: true; message: MessageDTO } | { error: ActionError }> {
+  let profile;
   try {
-    await requireActiveUser();
+    profile = await requireActiveUser();
   } catch (err) {
     const state = fromAuthzError(err);
     return { error: state.error as ActionError };
@@ -832,7 +939,7 @@ export async function forwardMessage(
 
   const { data: sourceAttachments } = await supabase
     .from("message_attachments")
-    .select("storage_path, mime_type, size_bytes")
+    .select("storage_path, file_name, mime_type, size_bytes, width, height")
     .eq("message_id", parsed.data.messageId);
 
   const target: MessageTarget =
@@ -840,11 +947,39 @@ export async function forwardMessage(
       ? { groupId: parsed.data.targetGroupId }
       : { recipientId: parsed.data.targetUserId! };
 
-  const attachments = (sourceAttachments ?? []).map((a) => ({
-    storagePath: a.storage_path,
-    mimeType: a.mime_type,
-    sizeBytes: a.size_bytes,
-  }));
+  // Attachment objects live under a conversation-scoped storage path
+  // (0012_message_attachments_storage.sql); sendMessage rejects any
+  // attachment whose path isn't under the *target* conversation's prefix,
+  // so forwarding into a different conversation needs its own copy of the
+  // object under the new prefix rather than reusing the source's path.
+  const targetPrefix =
+    "groupId" in target ? `group/${target.groupId}/` : `dm/${dmPair(profile.id, target.recipientId)[0]}/${dmPair(profile.id, target.recipientId)[1]}/`;
+
+  const supabaseAdmin = createAdminClient();
+  const attachments: {
+    storagePath: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    width?: number;
+    height?: number;
+  }[] = [];
+  for (const a of sourceAttachments ?? []) {
+    const objectName = a.storage_path.split("/").pop() ?? "attachment";
+    const newPath = `${targetPrefix}${crypto.randomUUID()}-${objectName}`;
+    const { error: copyError } = await supabaseAdmin.storage
+      .from(ATTACHMENT_BUCKET)
+      .copy(a.storage_path, newPath);
+    if (copyError) continue; // skip attachments the copy failed for rather than failing the whole forward
+    attachments.push({
+      storagePath: newPath,
+      fileName: a.file_name,
+      mimeType: a.mime_type,
+      sizeBytes: a.size_bytes,
+      width: a.width ?? undefined,
+      height: a.height ?? undefined,
+    });
+  }
 
   const result = await sendMessage(target, source.content, attachments.length ? attachments : undefined);
   if ("error" in result) return result;
