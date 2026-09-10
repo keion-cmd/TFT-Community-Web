@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import {
   listMyGroups,
   listMyDirectMessages,
+  listPinnedChats,
+  pinChat,
+  unpinChat,
   type GroupChatSummary,
   type DmChatSummary,
+  type PinnedChats,
 } from "@/app/actions/messaging";
 
 type ChatRow = {
@@ -18,9 +22,14 @@ type ChatRow = {
   lastMessageAt: string | null;
   preview: string | null;
   unreadCount: number;
+  pinTarget: { groupId: number } | { userId: string };
+  isPinned: boolean;
 };
 
-function toRows(groups: GroupChatSummary[], dms: DmChatSummary[]): ChatRow[] {
+function toRows(groups: GroupChatSummary[], dms: DmChatSummary[], pinned: PinnedChats): ChatRow[] {
+  const pinnedGroupIds = new Set(pinned.groupIds);
+  const pinnedDmUserIds = new Set(pinned.dmUserIds);
+
   const groupRows: ChatRow[] = groups.map((g) => ({
     key: `group:${g.id}`,
     href: `/groups/${g.id}`,
@@ -29,6 +38,8 @@ function toRows(groups: GroupChatSummary[], dms: DmChatSummary[]): ChatRow[] {
     lastMessageAt: g.lastMessageAt,
     preview: g.lastMessagePreview,
     unreadCount: g.unreadCount,
+    pinTarget: { groupId: g.id },
+    isPinned: pinnedGroupIds.has(g.id),
   }));
   const dmRows: ChatRow[] = dms.map((d) => ({
     key: `dm:${d.otherUserId}`,
@@ -38,8 +49,12 @@ function toRows(groups: GroupChatSummary[], dms: DmChatSummary[]): ChatRow[] {
     lastMessageAt: d.lastMessageAt,
     preview: d.lastMessagePreview,
     unreadCount: d.unreadCount,
+    pinTarget: { userId: d.otherUserId },
+    isPinned: pinnedDmUserIds.has(d.otherUserId),
   }));
+
   return [...groupRows, ...dmRows].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
     if (!a.lastMessageAt && !b.lastMessageAt) return 0;
     if (!a.lastMessageAt) return 1;
     if (!b.lastMessageAt) return -1;
@@ -56,19 +71,49 @@ type Props = {
   currentUserId: string;
   initialGroups: GroupChatSummary[];
   initialDms: DmChatSummary[];
+  initialPinned: PinnedChats;
 };
 
-export function ChatsList({ currentUserId, initialGroups, initialDms }: Props) {
-  const [rows, setRows] = useState<ChatRow[]>(() => toRows(initialGroups, initialDms));
+export function ChatsList({ currentUserId, initialGroups, initialDms, initialPinned }: Props) {
+  const [rows, setRows] = useState<ChatRow[]>(() => toRows(initialGroups, initialDms, initialPinned));
   const groupIdsRef = useRef(initialGroups.map((g) => g.id));
   const hasSubscribedOnce = useRef(false);
+  const [, startTransition] = useTransition();
 
   async function refetch() {
-    const [groupsResult, dmsResult] = await Promise.all([listMyGroups(), listMyDirectMessages()]);
+    const [groupsResult, dmsResult, pinnedResult] = await Promise.all([
+      listMyGroups(),
+      listMyDirectMessages(),
+      listPinnedChats(),
+    ]);
     const groups = "groups" in groupsResult ? groupsResult.groups : [];
     const dms = "dms" in dmsResult ? dmsResult.dms : [];
+    const pinned = "pinned" in pinnedResult ? pinnedResult.pinned : { groupIds: [], dmUserIds: [] };
     groupIdsRef.current = groups.map((g) => g.id);
-    setRows(toRows(groups, dms));
+    setRows(toRows(groups, dms, pinned));
+  }
+
+  function handleTogglePin(row: ChatRow) {
+    // Optimistic toggle so the row re-sorts immediately; refetch() below
+    // reconciles with the server on the next realtime tick regardless.
+    setRows((prev) =>
+      prev
+        .map((r) => (r.key === row.key ? { ...r, isPinned: !r.isPinned } : r))
+        .sort((a, b) => {
+          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+          if (!a.lastMessageAt && !b.lastMessageAt) return 0;
+          if (!a.lastMessageAt) return 1;
+          if (!b.lastMessageAt) return -1;
+          return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
+        }),
+    );
+    startTransition(async () => {
+      const action = row.isPinned ? unpinChat : pinChat;
+      const target = row.pinTarget;
+      const result =
+        "groupId" in target ? await action(target.groupId, undefined) : await action(undefined, target.userId);
+      if ("error" in result) refetch(); // rollback the optimistic toggle on failure
+    });
   }
 
   // Per-user live-update strategy (Phase 5-E's "per-user channel" for the
@@ -121,13 +166,16 @@ export function ChatsList({ currentUserId, initialGroups, initialDms }: Props) {
   return (
     <ul className="flex flex-col gap-2">
       {rows.map((row) => (
-        <li key={row.key}>
+        <li key={row.key} className="flex items-center gap-2">
           <Link
             href={row.href}
-            className="flex items-center justify-between gap-3 rounded-lg border border-black/[.08] p-4 hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
+            className="flex flex-1 items-center justify-between gap-3 rounded-lg border border-black/[.08] p-4 hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
           >
             <div className="flex flex-col">
-              <span className="font-medium">{row.title}</span>
+              <span className="flex items-center gap-1 font-medium">
+                {row.isPinned && <span aria-hidden="true">📌</span>}
+                {row.title}
+              </span>
               <span className="text-sm text-black/60 dark:text-white/60">
                 {row.preview ?? "No messages yet"}
               </span>
@@ -141,6 +189,15 @@ export function ChatsList({ currentUserId, initialGroups, initialDms }: Props) {
               )}
             </div>
           </Link>
+          <button
+            type="button"
+            onClick={() => handleTogglePin(row)}
+            aria-label={row.isPinned ? "Unpin chat" : "Pin chat"}
+            title={row.isPinned ? "Unpin chat" : "Pin chat"}
+            className="rounded-lg border border-black/[.08] p-2 text-sm hover:bg-black/[.03] dark:border-white/[.145] dark:hover:bg-white/[.05]"
+          >
+            {row.isPinned ? "📌" : "📍"}
+          </button>
         </li>
       ))}
     </ul>

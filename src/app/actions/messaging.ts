@@ -17,6 +17,9 @@ import {
   muteMemberSchema,
   removeMemberSchema,
   listMessagesSchema,
+  searchMessagesSchema,
+  forwardMessageSchema,
+  pinChatSchema,
 } from "@/lib/validation/messaging";
 import { checkRateLimit, rateLimitMessage } from "@/lib/rate-limit/rateLimit";
 
@@ -302,6 +305,7 @@ export type MessageDTO = {
   deletedAt: string | null;
   replyToId: number | null;
   replyPreview: string | null;
+  forwardedFromMessageId: number | null;
   attachments: { id: number; storagePath: string; mimeType: string; sizeBytes: number }[];
   reactions: { emoji: string; count: number; reactedByMe: boolean }[];
 };
@@ -358,7 +362,7 @@ export async function listMessages(
   let query = supabase
     .from("messages")
     .select(
-      "id, group_id, dm_user_a, dm_user_b, sender_id, content, reply_to_id, edited_at, deleted_at, created_at",
+      "id, group_id, dm_user_a, dm_user_b, sender_id, content, reply_to_id, edited_at, deleted_at, created_at, forwarded_from_message_id",
     )
     .order("created_at", { ascending: false })
     .limit(parsed.data.limit);
@@ -443,6 +447,7 @@ export async function listMessages(
           ? "Message deleted"
           : (replySource.content ?? "").slice(0, 120)
         : null,
+      forwardedFromMessageId: m.forwarded_from_message_id,
       attachments: attachmentsByMessage.get(m.id) ?? [],
       reactions: byEmoji ? Array.from(byEmoji.entries()).map(([emoji, v]) => ({ emoji, ...v })) : [],
     };
@@ -576,6 +581,7 @@ export async function sendMessage(
     deletedAt: null,
     replyToId: parsed.data.replyToId ?? null,
     replyPreview: null,
+    forwardedFromMessageId: null,
     attachments: (parsed.data.attachments ?? []).map((a, i) => ({
       id: -1 - i,
       storagePath: a.storagePath,
@@ -586,6 +592,178 @@ export async function sendMessage(
   };
 
   return { success: true, message };
+}
+
+// ============================================================
+// searchMessages — T-CODE-34. Delegates the actual visibility filtering to
+// the search_messages() SECURITY DEFINER RPC (0009_chat_enhancements.sql),
+// which mirrors the "messages readable by participants" RLS policy rather
+// than trusting the caller's groupId. This action only enriches the raw
+// rows with sender/chat display info for the UI.
+// ============================================================
+export type MessageSearchResult = {
+  messageId: number;
+  chatKind: "group" | "dm";
+  chatLabel: string;
+  href: string;
+  senderDisplayName: string;
+  snippet: string;
+  createdAt: string;
+};
+
+export async function searchMessages(
+  query: string,
+  groupId?: number,
+): Promise<{ results: MessageSearchResult[] } | { error: ActionError }> {
+  let profile;
+  try {
+    profile = await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  const parsed = searchMessagesSchema.safeParse({ query, groupId });
+  if (!parsed.success) {
+    return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
+  }
+
+  type SearchMessageRow = {
+    id: number;
+    group_id: number | null;
+    dm_user_a: string | null;
+    dm_user_b: string | null;
+    sender_id: string;
+    content: string | null;
+    created_at: string;
+    rank: number;
+  };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("search_messages", {
+    p_query: parsed.data.query,
+    p_group_id: parsed.data.groupId ?? null,
+  });
+  if (error) return { error: { code: "SEARCH_FAILED", message: "Could not search messages." } };
+  const rows = (data ?? []) as SearchMessageRow[];
+  if (rows.length === 0) return { results: [] };
+
+  const supabaseAdmin = createAdminClient();
+  const senderIds = Array.from(new Set(rows.map((r) => r.sender_id)));
+  const groupIds = Array.from(new Set(rows.map((r) => r.group_id).filter((id): id is number => id != null)));
+  const dmPartnerIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => r.group_id == null)
+        .map((r) => (r.dm_user_a === profile.id ? r.dm_user_b : r.dm_user_a))
+        .filter((id): id is string => id != null),
+    ),
+  );
+
+  const [{ data: senders }, { data: groups }, { data: partners }] = await Promise.all([
+    supabaseAdmin.from("profiles").select("id, display_name").in("id", senderIds),
+    groupIds.length
+      ? supabaseAdmin.from("groups").select("id, name").in("id", groupIds)
+      : Promise.resolve({ data: [] as { id: number; name: string }[] }),
+    dmPartnerIds.length
+      ? supabaseAdmin.from("profiles").select("id, display_name").in("id", dmPartnerIds)
+      : Promise.resolve({ data: [] as { id: string; display_name: string }[] }),
+  ]);
+
+  const senderById = new Map((senders ?? []).map((s) => [s.id, s.display_name]));
+  const groupById = new Map((groups ?? []).map((g) => [g.id, g.name]));
+  const partnerById = new Map((partners ?? []).map((p) => [p.id, p.display_name]));
+
+  const results: MessageSearchResult[] = rows.map((r) => {
+    if (r.group_id != null) {
+      return {
+        messageId: r.id,
+        chatKind: "group" as const,
+        chatLabel: groupById.get(r.group_id) ?? "Unknown group",
+        href: `/groups/${r.group_id}?m=${r.id}`,
+        senderDisplayName: senderById.get(r.sender_id) ?? "Unknown member",
+        snippet: (r.content ?? "").slice(0, 140),
+        createdAt: r.created_at,
+      };
+    }
+    const otherId = r.dm_user_a === profile.id ? r.dm_user_b : r.dm_user_a;
+    return {
+      messageId: r.id,
+      chatKind: "dm" as const,
+      chatLabel: (otherId ? partnerById.get(otherId) : null) ?? "Unknown member",
+      href: `/dm/${otherId}?m=${r.id}`,
+      senderDisplayName: senderById.get(r.sender_id) ?? "Unknown member",
+      snippet: (r.content ?? "").slice(0, 140),
+      createdAt: r.created_at,
+    };
+  });
+
+  return { results };
+}
+
+// ============================================================
+// forwardMessage — T-CODE-34. Reuses sendMessage() itself for the actual
+// send so the same permission/rate-limit/validation checks run (group
+// membership, muted status, SEND_MESSAGE_LIMIT) rather than duplicating
+// them. This function's own job is only: read the source message (via the
+// RLS-governed session client, so a caller can't forward a message they
+// couldn't otherwise see), copy its content/attachments into a call to
+// sendMessage, then stamp forwarded_from_message_id on the resulting row.
+// ============================================================
+export async function forwardMessage(
+  messageId: number,
+  targetGroupId?: number,
+  targetUserId?: string,
+): Promise<{ success: true; message: MessageDTO } | { error: ActionError }> {
+  try {
+    await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  const parsed = forwardMessageSchema.safeParse({ messageId, targetGroupId, targetUserId });
+  if (!parsed.success) {
+    return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
+  }
+
+  const supabase = await createClient();
+  const { data: source } = await supabase
+    .from("messages")
+    .select("id, content, deleted_at")
+    .eq("id", parsed.data.messageId)
+    .maybeSingle();
+  if (!source) return { error: { code: "NOT_FOUND", message: "Message not found." } };
+  if (source.deleted_at) return { error: { code: "MESSAGE_DELETED", message: "This message was deleted." } };
+  if (!source.content) {
+    return { error: { code: "VALIDATION_ERROR", message: "This message has no content to forward." } };
+  }
+
+  const { data: sourceAttachments } = await supabase
+    .from("message_attachments")
+    .select("storage_path, mime_type, size_bytes")
+    .eq("message_id", parsed.data.messageId);
+
+  const target: MessageTarget =
+    parsed.data.targetGroupId != null
+      ? { groupId: parsed.data.targetGroupId }
+      : { recipientId: parsed.data.targetUserId! };
+
+  const attachments = (sourceAttachments ?? []).map((a) => ({
+    storagePath: a.storage_path,
+    mimeType: a.mime_type,
+    sizeBytes: a.size_bytes,
+  }));
+
+  const result = await sendMessage(target, source.content, attachments.length ? attachments : undefined);
+  if ("error" in result) return result;
+
+  await supabase
+    .from("messages")
+    .update({ forwarded_from_message_id: parsed.data.messageId })
+    .eq("id", result.message.id);
+
+  return { success: true, message: { ...result.message, forwardedFromMessageId: parsed.data.messageId } };
 }
 
 export async function editMessage(
@@ -999,4 +1177,101 @@ export async function listMyDirectMessages(): Promise<{ dms: DmChatSummary[] } |
     unreadCount: unreadByPartner.get(id) ?? 0,
   }));
   return { dms };
+}
+
+// ============================================================
+// Pinned chats — T-CODE-34. Per-user chat-list pins (distinct from
+// groups.pinned_message_id / pin_message / unpin_message from T-CODE-11,
+// which pin one announcement message per group for everyone; these pin an
+// entire group or DM thread to the top of one user's own Chats list).
+// RLS on pinned_chats is self-only, so the session client alone is enough
+// authorization — no admin-client pre-check needed here.
+// ============================================================
+export type PinnedChats = { groupIds: number[]; dmUserIds: string[] };
+
+export async function listPinnedChats(): Promise<{ pinned: PinnedChats } | { error: ActionError }> {
+  let profile;
+  try {
+    profile = await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("pinned_chats")
+    .select("group_id, dm_other_user_id")
+    .eq("user_id", profile.id);
+  if (error) return { error: { code: "FETCH_FAILED", message: "Could not load pinned chats." } };
+
+  const groupIds = (data ?? [])
+    .map((r) => r.group_id)
+    .filter((id): id is number => id != null);
+  const dmUserIds = (data ?? [])
+    .map((r) => r.dm_other_user_id)
+    .filter((id): id is string => id != null);
+
+  return { pinned: { groupIds, dmUserIds } };
+}
+
+export async function pinChat(
+  groupId?: number,
+  userId?: string,
+): Promise<{ success: true } | { error: ActionError }> {
+  let profile;
+  try {
+    profile = await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  const parsed = pinChatSchema.safeParse({ groupId, userId });
+  if (!parsed.success) {
+    return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("pinned_chats").insert({
+    user_id: profile.id,
+    group_id: parsed.data.groupId ?? null,
+    dm_other_user_id: parsed.data.userId ?? null,
+  });
+  if (error && error.code !== "23505") {
+    return { error: { code: "PIN_FAILED", message: "Could not pin this chat." } };
+  }
+
+  revalidatePath("/chats");
+  return { success: true };
+}
+
+export async function unpinChat(
+  groupId?: number,
+  userId?: string,
+): Promise<{ success: true } | { error: ActionError }> {
+  let profile;
+  try {
+    profile = await requireActiveUser();
+  } catch (err) {
+    const state = fromAuthzError(err);
+    return { error: state.error as ActionError };
+  }
+
+  const parsed = pinChatSchema.safeParse({ groupId, userId });
+  if (!parsed.success) {
+    return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
+  }
+
+  const supabase = await createClient();
+  let query = supabase.from("pinned_chats").delete().eq("user_id", profile.id);
+  query =
+    parsed.data.groupId != null
+      ? query.eq("group_id", parsed.data.groupId)
+      : query.eq("dm_other_user_id", parsed.data.userId!);
+  const { error } = await query;
+  if (error) return { error: { code: "UNPIN_FAILED", message: "Could not unpin this chat." } };
+
+  revalidatePath("/chats");
+  return { success: true };
 }

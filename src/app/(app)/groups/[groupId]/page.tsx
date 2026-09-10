@@ -10,8 +10,10 @@ import { GroupMembersPanel } from "./GroupMembersPanel";
 
 export default async function GroupThreadPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ groupId: string }>;
+  searchParams: Promise<{ m?: string }>;
 }) {
   const profile = await getCurrentProfile();
   if (!profile) redirect("/login");
@@ -20,6 +22,9 @@ export default async function GroupThreadPage({
   const { groupId: groupIdParam } = await params;
   const groupId = Number(groupIdParam);
   if (!Number.isInteger(groupId) || groupId <= 0) notFound();
+
+  const { m } = await searchParams;
+  const highlightMessageId = m != null && Number.isInteger(Number(m)) ? Number(m) : null;
 
   // Session client, not the service-role client: this read must go through
   // RLS's "groups visible per type" policy (0002_group_overview.sql) so an
@@ -45,7 +50,7 @@ export default async function GroupThreadPage({
 
   const canModerate = isAdmin || membership?.role_in_group === "moderator" || membership?.role_in_group === "coordinator";
 
-  const messagesResult = await listMessages({ groupId });
+  const messagesResult = await listMessages({ groupId }, highlightMessageId != null ? 200 : undefined);
   const initialMessages = "messages" in messagesResult ? messagesResult.messages : [];
 
   const admin = createAdminClient();
@@ -104,6 +109,7 @@ export default async function GroupThreadPage({
         canModerate={canModerate}
         isGroup
         pinnedMessageId={group.pinned_message_id}
+        highlightMessageId={highlightMessageId}
       />
 
       {canModerate && (
