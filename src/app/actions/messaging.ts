@@ -494,6 +494,7 @@ export async function sendMessage(
   attachments?: { storagePath: string; mimeType: string; sizeBytes: number }[],
   replyToId?: number,
   topicId?: number,
+  isSavedMessages = false,
 ): Promise<{ success: true; message: MessageDTO } | { error: ActionError }> {
   let profile;
   try {
@@ -514,7 +515,14 @@ export async function sendMessage(
     };
   }
 
-  const parsed = sendMessageSchema.safeParse({ target, content, attachments, replyToId, topicId });
+  const parsed = sendMessageSchema.safeParse({
+    target,
+    content,
+    attachments,
+    replyToId,
+    topicId,
+    isSavedMessages,
+  });
   if (!parsed.success) {
     return { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request." } };
   }
@@ -595,7 +603,9 @@ export async function sendMessage(
     insertRow.group_id = groupId;
   } else {
     const recipientId = parsed.data.target.recipientId;
-    if (recipientId === profile.id) {
+    // Self-target is rejected by default; the Saved Messages entry point is
+    // the sole caller allowed to pass isSavedMessages: true to bypass this.
+    if (recipientId === profile.id && !parsed.data.isSavedMessages) {
       return { error: { code: "INVALID_TARGET", message: "You cannot message yourself." } };
     }
     const { data: recipient } = await supabaseAdmin

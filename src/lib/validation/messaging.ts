@@ -69,6 +69,7 @@ export const sendMessageSchema = z
     attachments: z.array(attachment).max(10).optional(),
     replyToId: messageId.optional(),
     topicId: topicId.optional(),
+    isSavedMessages: z.boolean().optional().default(false),
   })
   .refine((v) => v.topicId == null || "groupId" in v.target, {
     message: "Topics only apply to group messages.",
