@@ -4,6 +4,7 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { createClient } from "@/lib/supabase/server";
 import { getAttentionRequiredSummary } from "@/app/actions/attentionRequired";
+import { getUserGroups } from "@/lib/messaging/groups";
 import { CreateGroupForm } from "./CreateGroupForm";
 import { JoinGroupButton } from "./JoinGroupButton";
 import { AttentionBanner } from "./AttentionBanner";
@@ -22,20 +23,32 @@ export default async function GroupsBrowsePage() {
   // the comment above joinGroup in src/app/actions/messaging.ts and the
   // T-CODE-08 report.
   const supabase = await createClient();
-  const { data: visibleGroups } = await supabase
+  const { data: visibleGroups, error: visibleGroupsError } = await supabase
     .from("groups")
     .select("id, name, type, description, archived_at")
     .is("archived_at", null)
     .order("name", { ascending: true });
 
-  const { data: myMemberships } = await supabase
-    .from("group_members")
-    .select("group_id")
-    .eq("user_id", profile.id);
-  const myGroupIds = new Set((myMemberships ?? []).map((m) => m.group_id));
+  if (visibleGroupsError) {
+    console.error("[GroupsBrowsePage] failed to fetch visible groups", {
+      userId: profile.id,
+      error: visibleGroupsError,
+    });
+  }
+
+  const userGroupsResult = await getUserGroups(supabase, profile.id);
+  if ("error" in userGroupsResult) {
+    console.error("[GroupsBrowsePage] failed to fetch user's groups", {
+      userId: profile.id,
+      error: userGroupsResult.error,
+    });
+  }
+
+  const hasLoadError = !!visibleGroupsError || "error" in userGroupsResult;
+  const myGroups = "error" in userGroupsResult ? [] : userGroupsResult.data;
+  const myGroupIds = new Set(myGroups.map((g) => g.id));
 
   const groups = visibleGroups ?? [];
-  const myGroups = groups.filter((g) => myGroupIds.has(g.id));
   const joinableGroups = groups.filter((g) => !myGroupIds.has(g.id));
 
   const isAdmin = profile.roleRank >= ADMIN_MIN_RANK;
@@ -52,6 +65,15 @@ export default async function GroupsBrowsePage() {
       <h1 className="text-xl font-semibold">Groups</h1>
 
       {attentionSummary && <AttentionBanner summary={attentionSummary} />}
+
+      {hasLoadError && (
+        <p
+          role="alert"
+          className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-400"
+        >
+          Something went wrong loading groups. Please refresh the page — if this keeps happening, contact support.
+        </p>
+      )}
 
       <section className="flex flex-col gap-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">

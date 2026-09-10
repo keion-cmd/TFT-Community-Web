@@ -28,6 +28,7 @@ const SEND_MESSAGE_LIMIT = 30;
 const SEND_MESSAGE_WINDOW_SECONDS = 60;
 import { actionError, type ActionState, type ActionError } from "./types";
 import { EDIT_WINDOW_MINUTES } from "@/lib/messaging/constants";
+import { getUserGroups } from "@/lib/messaging/groups";
 
 const AUTHZ_MESSAGES: Record<AuthorizationError["code"], ActionState> = {
   NOT_AUTHENTICATED: actionError("NOT_AUTHENTICATED", "You must be signed in."),
@@ -1172,16 +1173,16 @@ export async function listMyGroups(): Promise<{ groups: GroupChatSummary[] } | {
   }
 
   const supabase = await createClient();
-  const { data: memberships } = await supabase.from("group_members").select("group_id").eq("user_id", profile.id);
-  const groupIds = (memberships ?? []).map((m) => m.group_id);
-  if (groupIds.length === 0) return { groups: [] };
-
-  const { data: groups } = await supabase
-    .from("groups")
-    .select("id, name, type")
-    .in("id", groupIds)
-    .is("archived_at", null);
-  const activeGroups = groups ?? [];
+  const userGroupsResult = await getUserGroups(supabase, profile.id);
+  if ("error" in userGroupsResult) {
+    console.error("[listMyGroups] failed to fetch user's groups", {
+      userId: profile.id,
+      error: userGroupsResult.error,
+    });
+    return { error: { code: "GROUPS_FETCH_FAILED", message: "Couldn't load your groups. Please try again." } };
+  }
+  const activeGroups = userGroupsResult.data;
+  if (activeGroups.length === 0) return { groups: [] };
 
   const { lastMessageByGroup, unreadByGroup } = await summarizeGroupMessages(
     supabase,
