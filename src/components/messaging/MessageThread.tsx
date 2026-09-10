@@ -16,6 +16,7 @@ import {
 import { EDIT_WINDOW_MINUTES } from "@/lib/messaging/constants";
 import { pinMessage, unpinMessage } from "@/app/actions/groupOverview";
 import { MessageItem } from "./MessageItem";
+import { ForwardMessagePicker } from "./ForwardMessagePicker";
 
 function dmPair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
@@ -37,6 +38,10 @@ type Props = {
   isGroup: boolean;
   // Group threads only — undefined/null for DMs, where pinning doesn't apply.
   pinnedMessageId?: number | null;
+  // Set from the Chats search result's ?m=<id> deep link (T-CODE-34) — the
+  // page-level Server Component fetches a wider initial window when this is
+  // present so the target message is actually in `initialMessages`.
+  highlightMessageId?: number | null;
 };
 
 export function MessageThread({
@@ -46,16 +51,19 @@ export function MessageThread({
   canModerate,
   isGroup,
   pinnedMessageId = null,
+  highlightMessageId = null,
 }: Props) {
   const [messages, setMessages] = useState<MessageDTO[]>(initialMessages);
   const [pinnedId, setPinnedId] = useState<number | null>(pinnedMessageId);
   const [pinError, setPinError] = useState<string | null>(null);
   const [composerValue, setComposerValue] = useState("");
   const [replyTo, setReplyTo] = useState<MessageDTO | null>(null);
+  const [forwardTarget, setForwardTarget] = useState<MessageDTO | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const bottomRef = useRef<HTMLDivElement>(null);
   const hasSubscribedOnce = useRef(false);
+  const hasScrolledToHighlight = useRef(false);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -71,8 +79,17 @@ export function MessageThread({
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length]);
+    if (highlightMessageId == null) {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+      return;
+    }
+    if (hasScrolledToHighlight.current) return;
+    const el = document.getElementById(`message-${highlightMessageId}`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      hasScrolledToHighlight.current = true;
+    }
+  }, [messages.length, highlightMessageId]);
 
   // Realtime: one channel per open thread, per Phase 5-E's group:{groupId} /
   // dm:{userA}:{userB} design. postgres_changes filters support a single
@@ -221,14 +238,20 @@ export function MessageThread({
               onEdit={handleEdit}
               onDelete={handleDelete}
               onToggleReaction={handleToggleReaction}
+              onForward={setForwardTarget}
               canPin={isGroup && canModerate}
               isPinned={pinnedId === m.id}
               onTogglePin={handleTogglePin}
+              highlighted={highlightMessageId === m.id}
             />
           ))
         )}
         <div ref={bottomRef} />
       </div>
+
+      {forwardTarget && (
+        <ForwardMessagePicker messageId={forwardTarget.id} onClose={() => setForwardTarget(null)} />
+      )}
 
       {pinError && <p className="text-sm text-red-600">{pinError}</p>}
 

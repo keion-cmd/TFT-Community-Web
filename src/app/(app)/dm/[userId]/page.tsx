@@ -7,8 +7,10 @@ import { MessageThread } from "@/components/messaging/MessageThread";
 
 export default async function DmThreadPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ userId: string }>;
+  searchParams: Promise<{ m?: string }>;
 }) {
   const profile = await getCurrentProfile();
   if (!profile) redirect("/login");
@@ -16,6 +18,9 @@ export default async function DmThreadPage({
 
   const { userId: recipientId } = await params;
   if (recipientId === profile.id) redirect("/chats");
+
+  const { m } = await searchParams;
+  const highlightMessageId = m != null && Number.isInteger(Number(m)) ? Number(m) : null;
 
   const admin = createAdminClient();
   const { data: recipient } = await admin
@@ -25,7 +30,10 @@ export default async function DmThreadPage({
     .maybeSingle();
   if (!recipient || recipient.status !== "active") notFound();
 
-  const messagesResult = await listMessages({ recipientId });
+  // A search deep link may point at a message older than the default
+  // 100-message window (see T-CODE-34 report) — widen it to the max the
+  // schema allows so the target message is actually present to scroll to.
+  const messagesResult = await listMessages({ recipientId }, highlightMessageId != null ? 200 : undefined);
   if ("error" in messagesResult) {
     if (messagesResult.error.code === "NOT_AUTHENTICATED" || messagesResult.error.code === "ACCOUNT_NOT_ACTIVE") {
       redirect("/login");
@@ -51,6 +59,7 @@ export default async function DmThreadPage({
         initialMessages={messagesResult.messages}
         canModerate={false}
         isGroup={false}
+        highlightMessageId={highlightMessageId}
       />
     </main>
   );

@@ -104,3 +104,31 @@ export const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(100),
 });
 export type ListMessagesInput = z.infer<typeof listMessagesSchema>;
+
+export const searchMessagesSchema = z.object({
+  query: z.string().trim().min(1, "Enter a search term").max(200, "Search term is too long"),
+  groupId: groupId.optional(),
+});
+export type SearchMessagesInput = z.infer<typeof searchMessagesSchema>;
+
+export const forwardMessageSchema = z
+  .object({
+    messageId,
+    targetGroupId: groupId.optional(),
+    targetUserId: userId.optional(),
+  })
+  .refine((v) => (v.targetGroupId != null) !== (v.targetUserId != null), {
+    message: "Choose exactly one destination to forward to.",
+  });
+export type ForwardMessageInput = z.infer<typeof forwardMessageSchema>;
+
+const pinChatTarget = z
+  .object({
+    groupId: groupId.optional(),
+    userId: userId.optional(),
+  })
+  .refine((v) => (v.groupId != null) !== (v.userId != null), {
+    message: "Specify exactly one chat to pin.",
+  });
+export const pinChatSchema = pinChatTarget;
+export type PinChatInput = z.infer<typeof pinChatSchema>;

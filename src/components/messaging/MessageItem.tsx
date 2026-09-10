@@ -24,9 +24,11 @@ type Props = {
   onEdit: (messageId: number, content: string) => Promise<{ success: true } | { error: { message: string } }>;
   onDelete: (messageId: number) => void;
   onToggleReaction: (messageId: number, emoji: string, reactedByMe: boolean) => void;
+  onForward?: (message: MessageDTO) => void;
   canPin?: boolean;
   isPinned?: boolean;
   onTogglePin?: (messageId: number) => void;
+  highlighted?: boolean;
 };
 
 export function MessageItem({
@@ -39,9 +41,11 @@ export function MessageItem({
   onEdit,
   onDelete,
   onToggleReaction,
+  onForward,
   canPin = false,
   isPinned = false,
   onTogglePin,
+  highlighted = false,
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content ?? "");
@@ -65,7 +69,15 @@ export function MessageItem({
   }
 
   return (
-    <div className="group flex flex-col gap-1 rounded-lg px-3 py-2 hover:bg-black/[.02] dark:hover:bg-white/[.03]">
+    <div
+      id={`message-${message.id}`}
+      className={`group flex flex-col gap-1 rounded-lg px-3 py-2 hover:bg-black/[.02] dark:hover:bg-white/[.03] ${
+        highlighted ? "bg-foreground/10 ring-1 ring-foreground/30" : ""
+      }`}
+    >
+      {message.forwardedFromMessageId != null && (
+        <p className="text-xs text-black/40 dark:text-white/40">↪ Forwarded</p>
+      )}
       {message.replyToId != null && (
         <p className="border-l-2 border-black/[.15] pl-2 text-xs text-black/50 dark:border-white/[.2] dark:text-white/50">
           {message.replyPreview ?? "…"}
@@ -184,6 +196,15 @@ export function MessageItem({
           >
             Reply
           </button>
+          {onForward && (
+            <button
+              type="button"
+              onClick={() => onForward(message)}
+              className="text-xs text-black/50 hover:underline dark:text-white/50"
+            >
+              Forward
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"
