@@ -34,52 +34,63 @@ export default async function GroupThreadPage({
   // ineligible user gets a clean 404 rather than an app-layer guess at
   // visibility. See T-CODE-08 report re: confirming this isn't just assumed.
   const supabase = await createClient();
-  const { data: group } = await supabase
-    .from("groups")
-    .select("id, name, type, description, location, pinned_message_id, archived_at")
-    .eq("id", groupId)
-    .maybeSingle();
+  const admin = createAdminClient();
+
+  // T-CODE-59: these five reads are independent of each other (none consumes
+  // another's result), so they're fired together instead of as a sequential
+  // chain. Promise.all (not allSettled) on purpose: every one of these was
+  // already awaited un-guarded before this change, so a rejection here must
+  // still abort the page exactly as it did previously — allSettled would be
+  // a silent behavior change (swallowing an error that used to throw).
+  const timerLabel = `[GroupThreadPage] data-fetch group=${groupId}`;
+  console.time(timerLabel);
+  const [groupRes, membershipRes, messagesResult, groupsResult, dmsResult, pinnedResult] = await Promise.all([
+    supabase
+      .from("groups")
+      .select("id, name, type, description, location, pinned_message_id, archived_at")
+      .eq("id", groupId)
+      .maybeSingle(),
+    supabase
+      .from("group_members")
+      .select("id, role_in_group, muted_until")
+      .eq("group_id", groupId)
+      .eq("user_id", profile.id)
+      .maybeSingle(),
+    listMessages({ groupId }, highlightMessageId != null ? 200 : undefined),
+    listMyGroups(),
+    listMyDirectMessages(),
+    listPinnedChats(),
+  ]);
+  console.timeEnd(timerLabel);
+
+  const group = groupRes.data;
   if (!group) notFound();
 
-  const { data: membership } = await supabase
-    .from("group_members")
-    .select("id, role_in_group, muted_until")
-    .eq("group_id", groupId)
-    .eq("user_id", profile.id)
-    .maybeSingle();
-
+  const membership = membershipRes.data;
   const isAdmin = profile.roleRank >= ADMIN_MIN_RANK;
   if (!membership && !isAdmin) redirect("/groups");
 
   const canModerate = isAdmin || membership?.role_in_group === "moderator" || membership?.role_in_group === "coordinator";
 
-  const messagesResult = await listMessages({ groupId }, highlightMessageId != null ? 200 : undefined);
   const initialMessages = "messages" in messagesResult ? messagesResult.messages : [];
 
-  const admin = createAdminClient();
+  // Single embedded-relationship query instead of a member-list fetch
+  // followed by a separate profiles-by-id fetch: group_members.user_id has
+  // an FK to profiles(id) (0001_init.sql), and it's the only FK between
+  // these two tables, so PostgREST can embed it unambiguously.
   const { data: memberRows } = await admin
     .from("group_members")
-    .select("id, user_id, role_in_group, muted_until")
+    .select("id, user_id, role_in_group, muted_until, profiles(id, username, display_name)")
     .eq("group_id", groupId)
     .order("joined_at", { ascending: true });
-  const memberUserIds = (memberRows ?? []).map((m) => m.user_id);
-  const { data: memberProfiles } = memberUserIds.length
-    ? await admin.from("profiles").select("id, username, display_name").in("id", memberUserIds)
-    : { data: [] as { id: string; username: string; display_name: string }[] };
-  const profileById = new Map((memberProfiles ?? []).map((p) => [p.id, p]));
   const members = (memberRows ?? []).map((m) => ({
     id: m.id,
     userId: m.user_id,
     roleInGroup: m.role_in_group,
     mutedUntil: m.muted_until,
-    profile: profileById.get(m.user_id) ?? null,
+    profile: (Array.isArray(m.profiles) ? m.profiles[0] : m.profiles) ?? null,
   }));
 
-  const [groupsResult, dmsResult, pinnedResult] = await Promise.all([
-    listMyGroups(),
-    listMyDirectMessages(),
-    listPinnedChats(),
-  ]);
   const sidebarGroups = "groups" in groupsResult ? groupsResult.groups : [];
   const sidebarDms = "dms" in dmsResult ? dmsResult.dms : [];
   const sidebarPinned = "pinned" in pinnedResult ? pinnedResult.pinned : { groupIds: [], dmUserIds: [] };
