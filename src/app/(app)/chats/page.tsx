@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { listMyGroups, listMyDirectMessages, listPinnedChats } from "@/app/actions/messaging";
-import { ChatsList } from "./ChatsList";
-import { ChatSearch } from "./ChatSearch";
+import { ChatsList } from "@/components/chat/ChatsList";
+import { ChatSearch } from "@/components/chat/ChatSearch";
+import { ChatShell } from "@/components/chat/ChatShell";
 
 export default async function ChatsPage() {
   const profile = await getCurrentProfile();
@@ -19,12 +20,19 @@ export default async function ChatsPage() {
   const pinned = "pinned" in pinnedResult ? pinnedResult.pinned : { groupIds: [], dmUserIds: [] };
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6 sm:p-10">
-      <h1 className="text-xl font-semibold">Chats</h1>
-
-      <ChatSearch />
-
-      <ChatsList currentUserId={profile.id} initialGroups={groups} initialDms={dms} initialPinned={pinned} />
-    </main>
+    <ChatShell
+      showSidebarOnMobile
+      sidebar={
+        <>
+          <h1 className="text-xl font-semibold text-foreground">Chats</h1>
+          <ChatSearch />
+          <ChatsList currentUserId={profile.id} initialGroups={groups} initialDms={dms} initialPinned={pinned} />
+        </>
+      }
+    >
+      <div className="hidden h-full flex-1 items-center justify-center p-10 text-sm text-muted-foreground lg:flex">
+        Select a chat to start messaging.
+      </div>
+    </ChatShell>
   );
 }

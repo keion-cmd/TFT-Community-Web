@@ -2,8 +2,11 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { listMessages } from "@/app/actions/messaging";
+import { listMessages, listMyGroups, listMyDirectMessages, listPinnedChats } from "@/app/actions/messaging";
 import { MessageThread } from "@/components/messaging/MessageThread";
+import { ChatsList } from "@/components/chat/ChatsList";
+import { ChatSearch } from "@/components/chat/ChatSearch";
+import { ChatShell } from "@/components/chat/ChatShell";
 
 export default async function DmThreadPage({
   params,
@@ -41,26 +44,51 @@ export default async function DmThreadPage({
     notFound();
   }
 
-  return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6 sm:p-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{recipient.display_name}</h1>
-          <p className="text-sm text-black/60 dark:text-white/60">@{recipient.username}</p>
-        </div>
-        <Link href="/chats" className="text-sm underline underline-offset-4">
-          Back to chats
-        </Link>
-      </div>
+  const [groupsResult, dmsResult, pinnedResult] = await Promise.all([
+    listMyGroups(),
+    listMyDirectMessages(),
+    listPinnedChats(),
+  ]);
+  const sidebarGroups = "groups" in groupsResult ? groupsResult.groups : [];
+  const sidebarDms = "dms" in dmsResult ? dmsResult.dms : [];
+  const sidebarPinned = "pinned" in pinnedResult ? pinnedResult.pinned : { groupIds: [], dmUserIds: [] };
 
-      <MessageThread
-        target={{ recipientId }}
-        currentUserId={profile.id}
-        initialMessages={messagesResult.messages}
-        canModerate={false}
-        isGroup={false}
-        highlightMessageId={highlightMessageId}
-      />
-    </main>
+  return (
+    <ChatShell
+      showSidebarOnMobile={false}
+      sidebar={
+        <>
+          <h1 className="text-xl font-semibold text-foreground">Chats</h1>
+          <ChatSearch />
+          <ChatsList
+            currentUserId={profile.id}
+            initialGroups={sidebarGroups}
+            initialDms={sidebarDms}
+            initialPinned={sidebarPinned}
+          />
+        </>
+      }
+    >
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6 sm:p-10">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold">{recipient.display_name}</h1>
+            <p className="text-sm text-black/60 dark:text-white/60">@{recipient.username}</p>
+          </div>
+          <Link href="/chats" className="text-sm underline underline-offset-4 lg:hidden">
+            Back to chats
+          </Link>
+        </div>
+
+        <MessageThread
+          target={{ recipientId }}
+          currentUserId={profile.id}
+          initialMessages={messagesResult.messages}
+          canModerate={false}
+          isGroup={false}
+          highlightMessageId={highlightMessageId}
+        />
+      </main>
+    </ChatShell>
   );
 }

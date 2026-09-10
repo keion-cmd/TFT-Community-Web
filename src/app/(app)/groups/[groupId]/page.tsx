@@ -4,8 +4,11 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { ADMIN_MIN_RANK } from "@/lib/auth/profile";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { listMessages } from "@/app/actions/messaging";
+import { listMessages, listMyGroups, listMyDirectMessages, listPinnedChats } from "@/app/actions/messaging";
 import { MessageThread } from "@/components/messaging/MessageThread";
+import { ChatsList } from "@/components/chat/ChatsList";
+import { ChatSearch } from "@/components/chat/ChatSearch";
+import { ChatShell } from "@/components/chat/ChatShell";
 import { GroupMembersPanel } from "./GroupMembersPanel";
 
 export default async function GroupThreadPage({
@@ -72,54 +75,79 @@ export default async function GroupThreadPage({
     profile: profileById.get(m.user_id) ?? null,
   }));
 
+  const [groupsResult, dmsResult, pinnedResult] = await Promise.all([
+    listMyGroups(),
+    listMyDirectMessages(),
+    listPinnedChats(),
+  ]);
+  const sidebarGroups = "groups" in groupsResult ? groupsResult.groups : [];
+  const sidebarDms = "dms" in dmsResult ? dmsResult.dms : [];
+  const sidebarPinned = "pinned" in pinnedResult ? pinnedResult.pinned : { groupIds: [], dmUserIds: [] };
+
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-6 sm:p-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href={`/groups/${group.id}/overview`} className="hover:underline">
-            <h1 className="text-xl font-semibold">{group.name}</h1>
-          </Link>
-          <p className="text-sm text-black/60 dark:text-white/60">
-            {group.type}
-            {group.location ? ` · ${group.location}` : ""}
+    <ChatShell
+      showSidebarOnMobile={false}
+      sidebar={
+        <>
+          <h1 className="text-xl font-semibold text-foreground">Chats</h1>
+          <ChatSearch />
+          <ChatsList
+            currentUserId={profile.id}
+            initialGroups={sidebarGroups}
+            initialDms={sidebarDms}
+            initialPinned={sidebarPinned}
+          />
+        </>
+      }
+    >
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6 sm:p-10">
+        <div className="flex items-center justify-between">
+          <div>
+            <Link href={`/groups/${group.id}/overview`} className="hover:underline">
+              <h1 className="text-xl font-semibold">{group.name}</h1>
+            </Link>
+            <p className="text-sm text-black/60 dark:text-white/60">
+              {group.type}
+              {group.location ? ` · ${group.location}` : ""}
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link href={`/groups/${group.id}/overview`} className="text-sm underline underline-offset-4">
+              Overview
+            </Link>
+            <Link href="/chats" className="text-sm underline underline-offset-4 lg:hidden">
+              Back to chats
+            </Link>
+          </div>
+        </div>
+
+        {group.archived_at && (
+          <p className="rounded-lg border border-red-600/30 bg-red-600/10 p-3 text-sm text-red-600">
+            This group is archived.
           </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Link href={`/groups/${group.id}/overview`} className="text-sm underline underline-offset-4">
-            Overview
-          </Link>
-          <Link href="/chats" className="text-sm underline underline-offset-4">
-            Back to chats
-          </Link>
-        </div>
-      </div>
+        )}
 
-      {group.archived_at && (
-        <p className="rounded-lg border border-red-600/30 bg-red-600/10 p-3 text-sm text-red-600">
-          This group is archived.
-        </p>
-      )}
+        {group.description && <p className="text-sm text-black/60 dark:text-white/60">{group.description}</p>}
 
-      {group.description && <p className="text-sm text-black/60 dark:text-white/60">{group.description}</p>}
+        <MessageThread
+          target={{ groupId }}
+          currentUserId={profile.id}
+          initialMessages={initialMessages}
+          canModerate={canModerate}
+          isGroup
+          pinnedMessageId={group.pinned_message_id}
+          highlightMessageId={highlightMessageId}
+        />
 
-      <MessageThread
-        target={{ groupId }}
-        currentUserId={profile.id}
-        initialMessages={initialMessages}
-        canModerate={canModerate}
-        isGroup
-        pinnedMessageId={group.pinned_message_id}
-        highlightMessageId={highlightMessageId}
-      />
-
-      {canModerate && (
-        <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">
-            Members
-          </h2>
-          <GroupMembersPanel groupId={groupId} members={members} currentUserId={profile.id} />
-        </section>
-      )}
-    </main>
+        {canModerate && (
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">
+              Members
+            </h2>
+            <GroupMembersPanel groupId={groupId} members={members} currentUserId={profile.id} />
+          </section>
+        )}
+      </main>
+    </ChatShell>
   );
 }
