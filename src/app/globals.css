@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Base surfaces */
+  --background: #0b1220;
+  --foreground: #e5e7eb;
+  --surface: #131c2e;
+  --surface-hover: #1a2540;
+  --border: #24304a;
+  --muted-foreground: #94a3b8;
+
+  /* Navy/indigo accent — TFT's own identity, distinct from Telegram blue */
+  --accent: #2c4870;
+  --accent-hover: #3a5c8f;
+  --accent-muted: #1b2d47;
+  --accent-foreground: #f8fafc;
+
+  /* Semantic status colors (schedule badges, form states, etc.) */
+  --success: #22c55e;
+  --success-muted: #14291c;
+  --warning: #f59e0b;
+  --warning-muted: #2e2410;
+  --danger: #ef4444;
+  --danger-muted: #2e1616;
+  --info: var(--accent);
+  --info-muted: var(--accent-muted);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-success: var(--success);
+  --color-success-muted: var(--success-muted);
+  --color-warning: var(--warning);
+  --color-warning-muted: var(--warning-muted);
+  --color-danger: var(--danger);
+  --color-danger-muted: var(--danger-muted);
+  --color-info: var(--info);
+  --color-info-muted: var(--info-muted);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
