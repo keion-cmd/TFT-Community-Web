@@ -89,20 +89,17 @@ async function isEligibleForGroupType(
 }
 
 // ============================================================
-// createGroup — Role >= Admin only for this task. Position-gated group
-// creation is explicitly deferred per T-CODE-08 spec.
+// createGroup — T-CODE-32: any active member may create a 'public' or
+// 'private' group (self-service, via the create_group RPC — they become
+// its moderator). 'staff_only', 'admin_only', and 'broadcast' remain
+// Role >= Admin only, via the pre-existing direct-insert path.
 // ============================================================
+const SELF_SERVICE_GROUP_TYPES = new Set(["public", "private"]);
+
 export async function createGroup(
   _prevState: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  let admin;
-  try {
-    admin = await requireAdmin();
-  } catch (err) {
-    return fromAuthzError(err);
-  }
-
   const parsed = createGroupSchema.safeParse({
     name: formData.get("name"),
     type: formData.get("type"),
@@ -112,6 +109,35 @@ export async function createGroup(
     return actionError("VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Invalid request.");
   }
   const { name, type, description } = parsed.data;
+
+  if (SELF_SERVICE_GROUP_TYPES.has(type)) {
+    try {
+      await requireActiveUser();
+    } catch (err) {
+      return fromAuthzError(err);
+    }
+
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("create_group", {
+      p_name: name,
+      p_description: description || null,
+      p_type: type,
+    });
+    if (error) {
+      return actionError("CREATE_FAILED", "Could not create this group.");
+    }
+
+    revalidatePath("/groups");
+    revalidatePath("/chats");
+    return { success: true };
+  }
+
+  let admin;
+  try {
+    admin = await requireAdmin();
+  } catch (err) {
+    return fromAuthzError(err);
+  }
 
   const supabase = await createClient();
   const { error } = await supabase.from("groups").insert({

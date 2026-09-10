@@ -53,14 +53,12 @@ export default async function GroupsBrowsePage() {
 
       {attentionSummary && <AttentionBanner summary={attentionSummary} />}
 
-      {isAdmin && (
-        <section className="flex flex-col gap-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">
-            + Create Group
-          </h2>
-          <CreateGroupForm />
-        </section>
-      )}
+      <section className="flex flex-col gap-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">
+          + Create Group
+        </h2>
+        <CreateGroupForm isAdmin={isAdmin} />
+      </section>
 
       <section className="flex flex-col gap-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-black/60 dark:text-white/60">

@@ -4,16 +4,22 @@ import { useActionState } from "react";
 import { createGroup } from "@/app/actions/messaging";
 import { initialActionState } from "@/app/actions/types";
 
-const GROUP_TYPES = [
+const SELF_SERVICE_GROUP_TYPES = [
   { value: "public", label: "Public — any active member can join" },
+  { value: "private", label: "Private — invite only" },
+];
+
+const ADMIN_ONLY_GROUP_TYPES = [
   { value: "staff_only", label: "Staff only — Assistant Admin+ or Position holders" },
   { value: "admin_only", label: "Admin only" },
-  { value: "private", label: "Private — invite only" },
   { value: "broadcast", label: "Broadcast — invite only" },
 ];
 
-export function CreateGroupForm() {
+export function CreateGroupForm({ isAdmin }: { isAdmin: boolean }) {
   const [state, formAction, isPending] = useActionState(createGroup, initialActionState);
+  const GROUP_TYPES = isAdmin
+    ? [...SELF_SERVICE_GROUP_TYPES, ...ADMIN_ONLY_GROUP_TYPES]
+    : SELF_SERVICE_GROUP_TYPES;
 
   return (
     <form
