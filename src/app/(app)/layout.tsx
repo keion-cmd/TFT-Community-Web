@@ -16,7 +16,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="flex items-center justify-end border-b border-black/[.08] px-4 py-3 dark:border-white/[.145]">
+      <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+        <span className="text-sm font-semibold tracking-wide text-accent">TFT</span>
         <NotificationBell userId={profile.id} />
       </header>
 

@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { resetPassword } from "@/app/actions/auth";
 import { initialActionState } from "@/app/actions/types";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 export function ResetPasswordForm() {
   const [state, formAction, isPending] = useActionState(
@@ -13,41 +15,35 @@ export function ResetPasswordForm() {
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
-        <label htmlFor="password" className="text-sm font-medium">
+        <label htmlFor="password" className="text-sm font-medium text-foreground">
           New password
         </label>
-        <input
+        <Input
           id="password"
           name="password"
           type="password"
           required
           minLength={8}
           autoComplete="new-password"
-          className="rounded border border-black/[.1] dark:border-white/[.15] bg-transparent px-3 py-2 text-sm"
         />
       </div>
       <div className="flex flex-col gap-1">
-        <label htmlFor="confirmPassword" className="text-sm font-medium">
+        <label htmlFor="confirmPassword" className="text-sm font-medium text-foreground">
           Confirm new password
         </label>
-        <input
+        <Input
           id="confirmPassword"
           name="confirmPassword"
           type="password"
           required
           minLength={8}
           autoComplete="new-password"
-          className="rounded border border-black/[.1] dark:border-white/[.15] bg-transparent px-3 py-2 text-sm"
         />
       </div>
-      <button
-        type="submit"
-        disabled={isPending}
-        className="rounded bg-foreground text-background px-4 py-2 text-sm font-medium disabled:opacity-50"
-      >
+      <Button type="submit" loading={isPending}>
         {isPending ? "Saving…" : "Reset password"}
-      </button>
-      {state.error && <p className="text-sm text-red-600">{state.error.message}</p>}
+      </Button>
+      {state.error && <p className="text-sm text-danger">{state.error.message}</p>}
     </form>
   );
 }

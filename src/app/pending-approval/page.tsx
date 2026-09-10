@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { fetchProfileWithRole } from "@/lib/auth/profile";
 import { signOut } from "@/app/actions/auth";
+import { Card } from "@/components/ui/Card";
 import type { AccountStatus } from "@/lib/auth/profile";
 
 // Doubles as the generic holding screen for every non-active status
@@ -54,13 +55,20 @@ export default async function PendingApprovalPage() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6 text-center">
-      <h1 className="text-xl font-semibold">{copy.title}</h1>
-      <p className="text-sm text-black/60 dark:text-white/60">{copy.body}</p>
-      <form action={signOut}>
-        <button type="submit" className="text-sm underline underline-offset-4">
-          Sign out
-        </button>
-      </form>
+      <p className="text-center text-lg font-semibold tracking-wide text-accent">TFT</p>
+
+      <Card className="flex flex-col items-center gap-4">
+        <h1 className="text-xl font-semibold text-foreground">{copy.title}</h1>
+        <p className="text-sm text-muted-foreground">{copy.body}</p>
+        <form action={signOut}>
+          <button
+            type="submit"
+            className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            Sign out
+          </button>
+        </form>
+      </Card>
     </main>
   );
 }

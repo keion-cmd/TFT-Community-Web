@@ -17,7 +17,7 @@ export function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-black/[.08] bg-background dark:border-white/[.145]">
+    <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface">
       {NAV_ITEMS.map((item) => {
         const isActive = item.matchPrefixes.some(
           (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
@@ -27,8 +27,10 @@ export function BottomNav() {
             key={item.href}
             href={item.href}
             aria-current={isActive ? "page" : undefined}
-            className={`flex flex-1 flex-col items-center gap-1 py-3 text-xs font-medium ${
-              isActive ? "text-black dark:text-white" : "text-black/50 dark:text-white/50"
+            className={`flex flex-1 flex-col items-center gap-1 border-t-2 py-3 text-xs font-medium transition-colors ${
+              isActive
+                ? "border-accent text-accent"
+                : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
             {item.label}

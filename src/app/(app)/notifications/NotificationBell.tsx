@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { getUnreadCount } from "@/app/actions/notifications";
+import { Badge } from "@/components/ui/Badge";
 
 // Dropped into each screen's existing ad hoc header row (this repo has no
 // shared nav shell yet — see T-CODE-17 report) rather than a new nav
@@ -41,12 +42,15 @@ export function NotificationBell({ userId }: { userId: string }) {
   }, [userId]);
 
   return (
-    <Link href="/notifications" className="relative text-sm underline underline-offset-4">
+    <Link href="/notifications" className="relative text-sm text-foreground hover:text-accent">
       Notifications
       {count !== null && count > 0 && (
-        <span className="absolute -right-3 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+        <Badge
+          variant="danger"
+          className="absolute -right-3 -top-2 min-w-4 justify-center px-1 py-0 text-[10px] leading-4"
+        >
           {count > 99 ? "99+" : count}
-        </span>
+        </Badge>
       )}
     </Link>
   );

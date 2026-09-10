@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { signUp } from "@/app/actions/auth";
 import { initialActionState } from "@/app/actions/types";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 export function RegisterForm() {
   const [state, formAction, isPending] = useActionState(signUp, initialActionState);
@@ -10,54 +12,41 @@ export function RegisterForm() {
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
-        <label htmlFor="username" className="text-sm font-medium">
+        <label htmlFor="username" className="text-sm font-medium text-foreground">
           Username
         </label>
-        <input
+        <Input
           id="username"
           name="username"
           required
           minLength={3}
           maxLength={24}
           autoComplete="username"
-          className="rounded border border-black/[.1] dark:border-white/[.15] bg-transparent px-3 py-2 text-sm"
         />
       </div>
       <div className="flex flex-col gap-1">
-        <label htmlFor="email" className="text-sm font-medium">
+        <label htmlFor="email" className="text-sm font-medium text-foreground">
           Email
         </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          className="rounded border border-black/[.1] dark:border-white/[.15] bg-transparent px-3 py-2 text-sm"
-        />
+        <Input id="email" name="email" type="email" required autoComplete="email" />
       </div>
       <div className="flex flex-col gap-1">
-        <label htmlFor="password" className="text-sm font-medium">
+        <label htmlFor="password" className="text-sm font-medium text-foreground">
           Password
         </label>
-        <input
+        <Input
           id="password"
           name="password"
           type="password"
           required
           minLength={8}
           autoComplete="new-password"
-          className="rounded border border-black/[.1] dark:border-white/[.15] bg-transparent px-3 py-2 text-sm"
         />
       </div>
-      <button
-        type="submit"
-        disabled={isPending}
-        className="rounded bg-foreground text-background px-4 py-2 text-sm font-medium disabled:opacity-50"
-      >
+      <Button type="submit" loading={isPending}>
         {isPending ? "Creating account…" : "Register"}
-      </button>
-      {state.error && <p className="text-sm text-red-600">{state.error.message}</p>}
+      </Button>
+      {state.error && <p className="text-sm text-danger">{state.error.message}</p>}
     </form>
   );
 }
